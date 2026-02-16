@@ -1,0 +1,44 @@
+name: Self-Healing MLOps Pipeline
+
+on:
+  schedule:
+    # Run drift monitoring every 6 hours
+    - cron: "0 */6 * * *"
+  workflow_dispatch: # Allow manual triggers
+
+jobs:
+  monitor-and-heal:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate synthetic data
+        run: python -m src.generate_data
+
+      - name: Run drift monitor and auto-retrain
+        run: python -m src.retrain_trigger
+
+      - name: Upload drift report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-report
+          path: data/drift_report.json
+
+      - name: Upload retrained model (if any)
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrained-models
+          path: models/*.pkl
+          if-no-files-found: ignore
