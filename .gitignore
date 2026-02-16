@@ -1,3 +1,6 @@
+# Claude Code local context
+CLAUDE.md
+
 __pycache__/
 *.pyc
 *.egg-info/
