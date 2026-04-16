@@ -1,5 +1,7 @@
 """Generate synthetic reference and current datasets for drift detection."""
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -44,6 +46,8 @@ def generate_current_data(
 
 
 if __name__ == "__main__":
+    Path("data").mkdir(parents=True, exist_ok=True)
+
     ref = generate_reference_data()
     ref.to_csv("data/reference.csv", index=False)
 
