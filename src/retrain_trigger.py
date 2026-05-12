@@ -36,7 +36,7 @@ def train_model(data_path: str = "data/reference.csv") -> RandomForestClassifier
     model.fit(X, y)
 
     accuracy = model.score(X, y)
-    print(f"Model trained — training accuracy: {accuracy:.4f}")
+    print(f"Model trained — in-sample accuracy: {accuracy:.4f}")
     return model
 
 
@@ -58,7 +58,7 @@ def heal() -> None:
     print(f"\nDrift threshold: {DRIFT_THRESHOLD}")
     print(f"Current drift:   {drift_score:.4f}")
 
-    if drift_score > DRIFT_THRESHOLD:
+    if drift_score >= DRIFT_THRESHOLD:
         print("Drift Detected! Triggering retraining...")
         model = train_model()
         save_model(model)
