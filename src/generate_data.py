@@ -45,6 +45,19 @@ def generate_current_data(
     })
 
 
+def generate_feast_data(n_users: int = 100, seed: int = 42) -> pd.DataFrame:
+    """Generate the Feast feature store parquet (one row per user)."""
+    rng = np.random.default_rng(seed)
+    now = pd.Timestamp.utcnow()
+    return pd.DataFrame({
+        "user_id": range(n_users),
+        "event_timestamp": [now] * n_users,
+        "user_transaction_count": rng.poisson(lam=5, size=n_users).astype("int64"),
+        "user_transaction_amount_avg": rng.normal(loc=50.0, scale=10.0, size=n_users).astype("float32"),
+        "user_transaction_amount_max": rng.normal(loc=200.0, scale=30.0, size=n_users).astype("float32"),
+    })
+
+
 if __name__ == "__main__":
     Path("data").mkdir(parents=True, exist_ok=True)
 
@@ -54,5 +67,9 @@ if __name__ == "__main__":
     cur = generate_current_data(drift=True)
     cur.to_csv("data/current.csv", index=False)
 
+    feast = generate_feast_data()
+    feast.to_parquet("data/user_transactions.parquet", index=False)
+
     print(f"Reference data: {ref.shape}")
     print(f"Current data (with drift): {cur.shape}")
+    print(f"Feast feature data: {feast.shape}")

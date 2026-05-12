@@ -29,6 +29,10 @@ def load_datasets(
     """Load reference and current datasets from CSV files."""
     reference = pd.read_csv(reference_path)
     current = pd.read_csv(current_path)
+    for label, df in (("reference", reference), ("current", current)):
+        missing = [c for c in FEATURE_COLUMNS if c not in df.columns]
+        if missing:
+            raise ValueError(f"{label} dataset is missing expected columns: {missing}")
     return reference[FEATURE_COLUMNS], current[FEATURE_COLUMNS]
 
 
@@ -59,8 +63,16 @@ def extract_drift_score(report_dict: dict) -> float:
     for metric in report_dict["metrics"]:
         metric_id = metric.get("metric", "")
         if metric_id == "DatasetDriftMetric":
-            return float(metric["result"]["drift_share"])
-    return 0.0
+            try:
+                return float(metric["result"]["drift_share"])
+            except KeyError as exc:
+                raise RuntimeError(
+                    f"Unexpected Evidently report schema — missing key: {exc}"
+                ) from exc
+    raise RuntimeError(
+        "DatasetDriftMetric not found in Evidently report. "
+        "Check Evidently version or report configuration."
+    )
 
 
 def main() -> float:
