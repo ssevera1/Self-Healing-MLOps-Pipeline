@@ -1,5 +1,6 @@
 """Generate synthetic reference and current datasets for drift detection."""
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -64,7 +65,10 @@ if __name__ == "__main__":
     ref = generate_reference_data()
     ref.to_csv("data/reference.csv", index=False)
 
-    cur = generate_current_data(drift=True)
+    # SIMULATE_DRIFT=false → generate on-distribution current data (healthy run).
+    # Defaults to true so the pipeline demonstrates self-healing out of the box.
+    simulate_drift = os.getenv("SIMULATE_DRIFT", "true").lower() != "false"
+    cur = generate_current_data(drift=simulate_drift)
     cur.to_csv("data/current.csv", index=False)
 
     feast = generate_feast_data()

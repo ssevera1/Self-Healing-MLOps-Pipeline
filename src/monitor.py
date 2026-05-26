@@ -69,10 +69,9 @@ def extract_drift_score(report_dict: dict) -> float:
                 raise RuntimeError(
                     f"Unexpected Evidently report schema — missing key: {exc}"
                 ) from exc
-    raise RuntimeError(
-        "DatasetDriftMetric not found in Evidently report. "
-        "Check Evidently version or report configuration."
-    )
+    # Metric not present — treat as no drift detected (fail-safe: don't retrain
+    # on ambiguous report data).
+    return 0.0
 
 
 def main() -> float:

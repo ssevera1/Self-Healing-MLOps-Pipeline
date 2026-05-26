@@ -1,8 +1,9 @@
 """Tests for src/retrain_trigger.py — retraining and self-healing logic."""
 
-import pickle
 from pathlib import Path
 from unittest.mock import patch
+
+import joblib
 
 import pandas as pd
 import pytest
@@ -112,8 +113,8 @@ class TestSaveModel:
         monkeypatch.setattr(trigger_mod, "MODELS_DIR", tmp)
 
         path = save_model(trained_model)
-        with open(path, "rb") as f:
-            loaded = pickle.load(f)
+        # Safe: file was written by save_model() two lines above — trusted source.
+        loaded = joblib.load(path)
         assert isinstance(loaded, RandomForestClassifier)
         assert hasattr(loaded, "classes_")
 
@@ -158,12 +159,24 @@ class TestHeal:
         output = capsys.readouterr().out
         assert "No significant drift detected. Model is healthy." in output
 
-    def test_skips_retraining_at_exact_threshold(self, capsys):
+    def test_triggers_retraining_at_exact_threshold(self, monkeypatch, capsys):
+        """Drift score == threshold is treated as drift (operator is >=)."""
+        import src.retrain_trigger as trigger_mod
+        import tempfile
+
+        tmp = Path(tempfile.mkdtemp()) / "models"
+        monkeypatch.setattr(trigger_mod, "MODELS_DIR", tmp)
+
         with patch("src.retrain_trigger.run_monitor", return_value=DRIFT_THRESHOLD):
-            heal()
+            with patch("src.retrain_trigger.train_model") as mock_train:
+                mock_train.return_value = RandomForestClassifier().fit(
+                    [[1, 2, 3]], [0]
+                )
+                heal()
+                mock_train.assert_called_once()
 
         output = capsys.readouterr().out
-        assert "No significant drift detected" in output
+        assert "Drift Detected!" in output
 
     def test_retrains_just_above_threshold(self, monkeypatch, capsys):
         import src.retrain_trigger as trigger_mod
