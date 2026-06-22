@@ -5,6 +5,7 @@ dataset and reports per-column data drift scores.
 """
 
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -12,6 +13,8 @@ import pandas as pd
 from evidently.legacy.report import Report
 from evidently.legacy.metric_preset import DataDriftPreset
 
+
+logger = logging.getLogger(__name__)
 
 FEATURE_COLUMNS = [
     "user_transaction_count",
@@ -41,12 +44,16 @@ def run_drift_report(
     current: pd.DataFrame,
 ) -> dict:
     """Run an Evidently DataDrift report and return the result dict."""
+    if len(reference) == 0:
+        raise ValueError("Reference dataset is empty")
+    if len(current) == 0:
+        raise ValueError("Current dataset is empty")
+
     report = Report(metrics=[DataDriftPreset()])
     report.run(reference_data=reference, current_data=current)
 
     result = report.as_dict()
 
-    # Persist the full JSON report for downstream consumers
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(REPORT_PATH, "w") as f:
         json.dump(result, f, indent=2)
@@ -69,29 +76,40 @@ def extract_drift_score(report_dict: dict) -> float:
                 raise RuntimeError(
                     f"Unexpected Evidently report schema — missing key: {exc}"
                 ) from exc
-    # Metric not present — treat as no drift detected (fail-safe: don't retrain
-    # on ambiguous report data).
     return 0.0
 
 
 def main() -> float:
     """Run monitoring pipeline and return the drift score."""
     print("Loading datasets...")
-    reference, current = load_datasets()
+    try:
+        reference, current = load_datasets()
+    except FileNotFoundError as e:
+        logger.error(f"Dataset file not found: {e}")
+        raise
+    except ValueError as e:
+        logger.error(f"Dataset validation failed: {e}")
+        raise
 
     print(f"Reference shape: {reference.shape}")
     print(f"Current shape:   {current.shape}")
 
     print("Running Evidently DataDrift report...")
-    report_dict = run_drift_report(reference, current)
+    try:
+        report_dict = run_drift_report(reference, current)
+    except ValueError as e:
+        logger.error(f"Cannot run drift report: {e}")
+        raise
 
     drift_score = extract_drift_score(report_dict)
     print(f"Drift score (share of drifted columns): {drift_score:.4f}")
     print(f"Full report saved to {REPORT_PATH}")
+    logger.info(f"Drift monitoring complete: score={drift_score:.4f}")
 
     return drift_score
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     score = main()
     sys.exit(0)
