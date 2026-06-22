@@ -5,6 +5,7 @@ the configured threshold, retrains the fraud-detection model and saves a
 new versioned artifact.
 """
 
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,7 +18,7 @@ from sklearn.model_selection import train_test_split
 
 from src.monitor import main as run_monitor
 
-DRIFT_THRESHOLD = 0.3
+DRIFT_THRESHOLD = float(os.getenv("DRIFT_THRESHOLD", "0.3"))
 MODELS_DIR = Path("models")
 
 
@@ -37,6 +38,12 @@ def train_model(data_path: str = "data/reference.csv") -> RandomForestClassifier
     ]
     X = df[feature_cols]
     y = df["is_fraud"]
+
+    if len(X) == 0:
+        raise ValueError(f"No rows in training data: {data_path}")
+
+    if y.isna().any() or X.isna().any().any():
+        raise ValueError(f"NaN values detected in training data: {data_path}")
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
@@ -78,9 +85,13 @@ def heal() -> None:
         print("Drift Detected! Triggering retraining...")
         # Retrain on the *current* (drifted) data so the new model fits the
         # production distribution, not the stale reference distribution.
-        model = train_model(data_path="data/current.csv")
-        save_model(model)
-        print("Self-healing retraining complete.")
+        try:
+            model = train_model(data_path="data/current.csv")
+            save_model(model)
+            print("Self-healing retraining complete.")
+        except (FileNotFoundError, ValueError, pd.errors.ParserError) as e:
+            print(f"Error during retraining: {e}", file=sys.stderr)
+            sys.exit(1)
     else:
         print("No significant drift detected. Model is healthy.")
 
