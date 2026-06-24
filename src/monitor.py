@@ -27,9 +27,23 @@ def load_datasets(
     current_path: str = "data/current.csv",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load reference and current datasets from CSV files."""
-    reference = pd.read_csv(reference_path)
-    current = pd.read_csv(current_path)
+    try:
+        reference = pd.read_csv(reference_path)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Reference dataset not found: {reference_path}") from exc
+    except pd.errors.ParserError as exc:
+        raise ValueError(f"Failed to parse reference dataset {reference_path}: {exc}") from exc
+
+    try:
+        current = pd.read_csv(current_path)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Current dataset not found: {current_path}") from exc
+    except pd.errors.ParserError as exc:
+        raise ValueError(f"Failed to parse current dataset {current_path}: {exc}") from exc
+
     for label, df in (("reference", reference), ("current", current)):
+        if df.empty:
+            raise ValueError(f"{label} dataset is empty: {reference_path if label == 'reference' else current_path}")
         missing = [c for c in FEATURE_COLUMNS if c not in df.columns]
         if missing:
             raise ValueError(f"{label} dataset is missing expected columns: {missing}")
@@ -77,7 +91,11 @@ def extract_drift_score(report_dict: dict) -> float:
 def main() -> float:
     """Run monitoring pipeline and return the drift score."""
     print("Loading datasets...")
-    reference, current = load_datasets()
+    try:
+        reference, current = load_datasets()
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Error loading datasets: {e}", file=sys.stderr)
+        sys.exit(1)
 
     print(f"Reference shape: {reference.shape}")
     print(f"Current shape:   {current.shape}")
