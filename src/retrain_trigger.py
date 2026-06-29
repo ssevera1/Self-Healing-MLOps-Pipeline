@@ -20,6 +20,7 @@ from src.monitor import main as run_monitor
 
 DRIFT_THRESHOLD = float(os.getenv("DRIFT_THRESHOLD", "0.3"))
 MODELS_DIR = Path("models")
+MIN_TRAIN_SAMPLES = int(os.getenv("MIN_TRAIN_SAMPLES", "10"))
 
 
 def train_model(data_path: str = "data/reference.csv") -> RandomForestClassifier:
@@ -42,8 +43,19 @@ def train_model(data_path: str = "data/reference.csv") -> RandomForestClassifier
     if len(X) == 0:
         raise ValueError(f"No rows in training data: {data_path}")
 
+    if len(X) < MIN_TRAIN_SAMPLES:
+        raise ValueError(
+            f"Insufficient training samples: {len(X)} < {MIN_TRAIN_SAMPLES}"
+        )
+
     if y.isna().any() or X.isna().any().any():
         raise ValueError(f"NaN values detected in training data: {data_path}")
+
+    class_counts = y.value_counts()
+    if len(class_counts) < 2:
+        raise ValueError(
+            f"Training data must contain both classes; found only {list(class_counts.index)}"
+        )
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
