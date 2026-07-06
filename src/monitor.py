@@ -5,6 +5,7 @@ dataset and reports per-column data drift scores.
 """
 
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -12,6 +13,8 @@ import pandas as pd
 from evidently.legacy.report import Report
 from evidently.legacy.metric_preset import DataDriftPreset
 
+
+logger = logging.getLogger(__name__)
 
 FEATURE_COLUMNS = [
     "user_transaction_count",
@@ -41,6 +44,11 @@ def run_drift_report(
     current: pd.DataFrame,
 ) -> dict:
     """Run an Evidently DataDrift report and return the result dict."""
+    if len(reference) == 0:
+        raise ValueError("Reference dataset is empty")
+    if len(current) == 0:
+        raise ValueError("Current dataset is empty")
+
     report = Report(metrics=[DataDriftPreset()])
     report.run(reference_data=reference, current_data=current)
 
@@ -76,18 +84,36 @@ def extract_drift_score(report_dict: dict) -> float:
 
 def main() -> float:
     """Run monitoring pipeline and return the drift score."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
     print("Loading datasets...")
-    reference, current = load_datasets()
+    try:
+        reference, current = load_datasets()
+    except FileNotFoundError as exc:
+        logger.error(f"Dataset file not found: {exc}", exc_info=True)
+        sys.exit(1)
+    except ValueError as exc:
+        logger.error(f"Dataset validation failed: {exc}", exc_info=True)
+        sys.exit(1)
 
     print(f"Reference shape: {reference.shape}")
     print(f"Current shape:   {current.shape}")
+    logger.info(f"Loaded reference: {reference.shape}, current: {current.shape}")
 
     print("Running Evidently DataDrift report...")
-    report_dict = run_drift_report(reference, current)
+    try:
+        report_dict = run_drift_report(reference, current)
+    except ValueError as exc:
+        logger.error(f"Dataset validation before report failed: {exc}", exc_info=True)
+        sys.exit(1)
 
     drift_score = extract_drift_score(report_dict)
     print(f"Drift score (share of drifted columns): {drift_score:.4f}")
     print(f"Full report saved to {REPORT_PATH}")
+    logger.info(f"Drift score calculated: {drift_score:.4f}")
 
     return drift_score
 
