@@ -5,6 +5,7 @@ dataset and reports per-column data drift scores.
 """
 
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import pandas as pd
 from evidently.legacy.report import Report
 from evidently.legacy.metric_preset import DataDriftPreset
 
+logger = logging.getLogger(__name__)
 
 FEATURE_COLUMNS = [
     "user_transaction_count",
@@ -41,6 +43,11 @@ def run_drift_report(
     current: pd.DataFrame,
 ) -> dict:
     """Run an Evidently DataDrift report and return the result dict."""
+    if len(reference) == 0:
+        raise ValueError("Reference dataset is empty")
+    if len(current) == 0:
+        raise ValueError("Current dataset is empty")
+
     report = Report(metrics=[DataDriftPreset()])
     report.run(reference_data=reference, current_data=current)
 
@@ -60,38 +67,61 @@ def extract_drift_score(report_dict: dict) -> float:
     The drift share is the fraction of columns that are detected as drifted
     (value between 0.0 and 1.0).
     """
-    for metric in report_dict["metrics"]:
+    for metric in report_dict.get("metrics", []):
         metric_id = metric.get("metric", "")
         if metric_id == "DatasetDriftMetric":
             try:
-                return float(metric["result"]["drift_share"])
+                drift_share = float(metric["result"]["drift_share"])
+                logger.debug(f"Extracted drift_share from report: {drift_share}")
+                return drift_share
             except KeyError as exc:
                 raise RuntimeError(
                     f"Unexpected Evidently report schema — missing key: {exc}"
                 ) from exc
     # Metric not present — treat as no drift detected (fail-safe: don't retrain
     # on ambiguous report data).
+    logger.warning("DatasetDriftMetric not found in report; defaulting to drift_share=0.0")
     return 0.0
 
 
 def main() -> float:
     """Run monitoring pipeline and return the drift score."""
     print("Loading datasets...")
-    reference, current = load_datasets()
+    try:
+        reference, current = load_datasets()
+    except FileNotFoundError as e:
+        logger.error(f"Failed to load datasets: {e}")
+        raise
+    except ValueError as e:
+        logger.error(f"Dataset validation failed: {e}")
+        raise
 
     print(f"Reference shape: {reference.shape}")
     print(f"Current shape:   {current.shape}")
 
     print("Running Evidently DataDrift report...")
-    report_dict = run_drift_report(reference, current)
+    try:
+        report_dict = run_drift_report(reference, current)
+    except ValueError as e:
+        logger.error(f"Empty dataset passed to drift report: {e}")
+        raise
 
     drift_score = extract_drift_score(report_dict)
     print(f"Drift score (share of drifted columns): {drift_score:.4f}")
     print(f"Full report saved to {REPORT_PATH}")
+    logger.info(f"Drift monitoring complete: drift_score={drift_score:.4f}")
 
     return drift_score
 
 
 if __name__ == "__main__":
-    score = main()
-    sys.exit(0)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+    try:
+        score = main()
+        sys.exit(0)
+    except Exception as e:
+        logger.exception(f"Monitor failed: {e}")
+        sys.exit(1)
