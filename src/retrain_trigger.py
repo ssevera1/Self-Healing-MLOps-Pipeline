@@ -20,6 +20,7 @@ from src.monitor import main as run_monitor
 
 DRIFT_THRESHOLD = float(os.getenv("DRIFT_THRESHOLD", "0.3"))
 MODELS_DIR = Path("models")
+MIN_SAMPLES_FOR_TRAIN = int(os.getenv("MIN_SAMPLES_FOR_TRAIN", "50"))
 
 
 def train_model(data_path: str = "data/reference.csv") -> RandomForestClassifier:
@@ -42,12 +43,27 @@ def train_model(data_path: str = "data/reference.csv") -> RandomForestClassifier
     if len(X) == 0:
         raise ValueError(f"No rows in training data: {data_path}")
 
+    if len(X) < MIN_SAMPLES_FOR_TRAIN:
+        raise ValueError(
+            f"Insufficient samples for training ({len(X)} < {MIN_SAMPLES_FOR_TRAIN}): {data_path}"
+        )
+
     if y.isna().any() or X.isna().any().any():
         raise ValueError(f"NaN values detected in training data: {data_path}")
+
+    if len(y.unique()) < 2:
+        raise ValueError(
+            f"Target variable lacks both classes in training data: {data_path}"
+        )
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
+
+    if len(y_train.unique()) < 2:
+        raise ValueError(
+            "Training split lacks both target classes; data may be too small or imbalanced"
+        )
 
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
@@ -76,7 +92,11 @@ def save_model(model: RandomForestClassifier) -> Path:
 
 def heal() -> None:
     """Run the full self-healing loop: monitor → decide → retrain."""
-    drift_score = run_monitor()
+    try:
+        drift_score = run_monitor()
+    except (FileNotFoundError, pd.errors.ParserError, ValueError) as e:
+        print(f"Error during monitoring: {e}", file=sys.stderr)
+        sys.exit(1)
 
     print(f"\nDrift threshold: {DRIFT_THRESHOLD}")
     print(f"Current drift:   {drift_score:.4f}")
