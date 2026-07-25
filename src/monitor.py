@@ -27,9 +27,23 @@ def load_datasets(
     current_path: str = "data/current.csv",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load reference and current datasets from CSV files."""
-    reference = pd.read_csv(reference_path)
-    current = pd.read_csv(current_path)
+    try:
+        reference = pd.read_csv(reference_path)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Reference dataset not found: {reference_path}") from exc
+    except pd.errors.ParserError as exc:
+        raise ValueError(f"Failed to parse reference CSV: {reference_path}") from exc
+
+    try:
+        current = pd.read_csv(current_path)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Current dataset not found: {current_path}") from exc
+    except pd.errors.ParserError as exc:
+        raise ValueError(f"Failed to parse current CSV: {current_path}") from exc
+
     for label, df in (("reference", reference), ("current", current)):
+        if df.empty:
+            raise ValueError(f"{label} dataset is empty")
         missing = [c for c in FEATURE_COLUMNS if c not in df.columns]
         if missing:
             raise ValueError(f"{label} dataset is missing expected columns: {missing}")
@@ -60,7 +74,7 @@ def extract_drift_score(report_dict: dict) -> float:
     The drift share is the fraction of columns that are detected as drifted
     (value between 0.0 and 1.0).
     """
-    for metric in report_dict["metrics"]:
+    for metric in report_dict.get("metrics", []):
         metric_id = metric.get("metric", "")
         if metric_id == "DatasetDriftMetric":
             try:
@@ -77,7 +91,11 @@ def extract_drift_score(report_dict: dict) -> float:
 def main() -> float:
     """Run monitoring pipeline and return the drift score."""
     print("Loading datasets...")
-    reference, current = load_datasets()
+    try:
+        reference, current = load_datasets()
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Error loading datasets: {e}", file=sys.stderr)
+        sys.exit(1)
 
     print(f"Reference shape: {reference.shape}")
     print(f"Current shape:   {current.shape}")
