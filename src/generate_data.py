@@ -1,6 +1,7 @@
 """Generate synthetic reference and current datasets for drift detection."""
 
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -59,20 +60,41 @@ def generate_feast_data(n_users: int = 100, seed: int = 42) -> pd.DataFrame:
     })
 
 
+def _write_file(df: pd.DataFrame, path: str, format: str = "csv") -> None:
+    """Write dataframe to file with error handling."""
+    try:
+        if format == "csv":
+            df.to_csv(path, index=False)
+        elif format == "parquet":
+            df.to_parquet(path, index=False)
+        else:
+            raise ValueError(f"Unsupported format: {format}")
+    except OSError as e:
+        print(f"Error: Failed to write {path} - {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: Unexpected error writing {path} - {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    Path("data").mkdir(parents=True, exist_ok=True)
+    try:
+        Path("data").mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"Error: Failed to create data/ directory - {e}", file=sys.stderr)
+        sys.exit(1)
 
     ref = generate_reference_data()
-    ref.to_csv("data/reference.csv", index=False)
+    _write_file(ref, "data/reference.csv", format="csv")
 
     # SIMULATE_DRIFT=false → generate on-distribution current data (healthy run).
     # Defaults to true so the pipeline demonstrates self-healing out of the box.
     simulate_drift = os.getenv("SIMULATE_DRIFT", "true").lower() != "false"
     cur = generate_current_data(drift=simulate_drift)
-    cur.to_csv("data/current.csv", index=False)
+    _write_file(cur, "data/current.csv", format="csv")
 
     feast = generate_feast_data()
-    feast.to_parquet("data/user_transactions.parquet", index=False)
+    _write_file(feast, "data/user_transactions.parquet", format="parquet")
 
     print(f"Reference data: {ref.shape}")
     print(f"Current data (with drift): {cur.shape}")
