@@ -7,6 +7,16 @@ import numpy as np
 import pandas as pd
 
 
+def _validate_dataset(df: pd.DataFrame, name: str) -> None:
+    """Validate that dataset has no NaN values and contains both fraud classes."""
+    if df.isna().any().any():
+        raise ValueError(f"{name} contains NaN values")
+    
+    fraud_classes = df["is_fraud"].unique()
+    if len(fraud_classes) < 2:
+        raise ValueError(f"{name} does not contain both fraud classes (0 and 1)")
+
+
 def generate_reference_data(n_samples: int = 1000, seed: int = 42) -> pd.DataFrame:
     """Generate a stable reference (historical) dataset."""
     rng = np.random.default_rng(seed)
@@ -63,12 +73,14 @@ if __name__ == "__main__":
     Path("data").mkdir(parents=True, exist_ok=True)
 
     ref = generate_reference_data()
+    _validate_dataset(ref, "Reference data")
     ref.to_csv("data/reference.csv", index=False)
 
     # SIMULATE_DRIFT=false → generate on-distribution current data (healthy run).
     # Defaults to true so the pipeline demonstrates self-healing out of the box.
     simulate_drift = os.getenv("SIMULATE_DRIFT", "true").lower() != "false"
     cur = generate_current_data(drift=simulate_drift)
+    _validate_dataset(cur, "Current data")
     cur.to_csv("data/current.csv", index=False)
 
     feast = generate_feast_data()
