@@ -7,6 +7,22 @@ import numpy as np
 import pandas as pd
 
 
+def _validate_dataframe(df: pd.DataFrame, name: str) -> None:
+    """Validate that a DataFrame has no NaN values and non-zero row count.
+    
+    Args:
+        df: DataFrame to validate.
+        name: Name of the dataset for error messages.
+        
+    Raises:
+        ValueError: If DataFrame contains NaN values or has zero rows.
+    """
+    if df.shape[0] == 0:
+        raise ValueError(f"{name} has zero rows")
+    if df.isna().any().any():
+        raise ValueError(f"{name} contains NaN values")
+
+
 def generate_reference_data(n_samples: int = 1000, seed: int = 42) -> pd.DataFrame:
     """Generate a stable reference (historical) dataset."""
     rng = np.random.default_rng(seed)
@@ -63,15 +79,18 @@ if __name__ == "__main__":
     Path("data").mkdir(parents=True, exist_ok=True)
 
     ref = generate_reference_data()
+    _validate_dataframe(ref, "Reference data")
     ref.to_csv("data/reference.csv", index=False)
 
     # SIMULATE_DRIFT=false → generate on-distribution current data (healthy run).
     # Defaults to true so the pipeline demonstrates self-healing out of the box.
     simulate_drift = os.getenv("SIMULATE_DRIFT", "true").lower() != "false"
     cur = generate_current_data(drift=simulate_drift)
+    _validate_dataframe(cur, "Current data")
     cur.to_csv("data/current.csv", index=False)
 
     feast = generate_feast_data()
+    _validate_dataframe(feast, "Feast feature data")
     feast.to_parquet("data/user_transactions.parquet", index=False)
 
     print(f"Reference data: {ref.shape}")
