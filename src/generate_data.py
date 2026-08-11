@@ -7,6 +7,42 @@ import numpy as np
 import pandas as pd
 
 
+EXPECTED_COLUMNS = {
+    "reference": {"user_transaction_count", "user_transaction_amount_avg", "user_transaction_amount_max", "is_fraud"},
+    "current": {"user_transaction_count", "user_transaction_amount_avg", "user_transaction_amount_max", "is_fraud"},
+    "feast": {"user_id", "event_timestamp", "user_transaction_count", "user_transaction_amount_avg", "user_transaction_amount_max"},
+}
+
+
+def validate_dataset(df: pd.DataFrame, dataset_type: str) -> None:
+    """Validate that dataset contains expected columns and has no null values.
+    
+    Args:
+        df: DataFrame to validate.
+        dataset_type: One of 'reference', 'current', 'feast'.
+        
+    Raises:
+        ValueError: If validation fails.
+    """
+    expected = EXPECTED_COLUMNS.get(dataset_type)
+    if expected is None:
+        raise ValueError(f"Unknown dataset type: {dataset_type}")
+    
+    actual = set(df.columns)
+    missing = expected - actual
+    if missing:
+        raise ValueError(f"{dataset_type} dataset missing columns: {missing}")
+    
+    extra = actual - expected
+    if extra:
+        raise ValueError(f"{dataset_type} dataset has unexpected columns: {extra}")
+    
+    null_counts = df[list(expected)].isnull().sum()
+    if null_counts.any():
+        null_info = null_counts[null_counts > 0].to_dict()
+        raise ValueError(f"{dataset_type} dataset contains null values: {null_info}")
+
+
 def generate_reference_data(n_samples: int = 1000, seed: int = 42) -> pd.DataFrame:
     """Generate a stable reference (historical) dataset."""
     rng = np.random.default_rng(seed)
@@ -63,15 +99,18 @@ if __name__ == "__main__":
     Path("data").mkdir(parents=True, exist_ok=True)
 
     ref = generate_reference_data()
+    validate_dataset(ref, "reference")
     ref.to_csv("data/reference.csv", index=False)
 
     # SIMULATE_DRIFT=false → generate on-distribution current data (healthy run).
     # Defaults to true so the pipeline demonstrates self-healing out of the box.
     simulate_drift = os.getenv("SIMULATE_DRIFT", "true").lower() != "false"
     cur = generate_current_data(drift=simulate_drift)
+    validate_dataset(cur, "current")
     cur.to_csv("data/current.csv", index=False)
 
     feast = generate_feast_data()
+    validate_dataset(feast, "feast")
     feast.to_parquet("data/user_transactions.parquet", index=False)
 
     print(f"Reference data: {ref.shape}")
