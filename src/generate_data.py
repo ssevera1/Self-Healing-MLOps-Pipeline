@@ -1,26 +1,74 @@
 """Generate synthetic reference and current datasets for drift detection."""
 
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 
-def _validate_dataframe(df: pd.DataFrame, name: str) -> None:
-    """Validate that a DataFrame has no NaN values and non-zero row count.
-    
+EXPECTED_COLUMNS = {
+    "reference": {"user_transaction_count", "user_transaction_amount_avg", "user_transaction_amount_max", "is_fraud"},
+    "current": {"user_transaction_count", "user_transaction_amount_avg", "user_transaction_amount_max", "is_fraud"},
+    "feast": {"user_id", "event_timestamp", "user_transaction_count", "user_transaction_amount_avg", "user_transaction_amount_max"},
+}
+
+NON_NEGATIVE_COLUMNS = {
+    "reference": {"user_transaction_count", "user_transaction_amount_avg", "user_transaction_amount_max"},
+    "current": {"user_transaction_count", "user_transaction_amount_avg", "user_transaction_amount_max"},
+    "feast": {"user_id", "user_transaction_count", "user_transaction_amount_avg", "user_transaction_amount_max"},
+}
+
+# Datasets that carry a binary fraud label, which should always contain both classes.
+FRAUD_LABEL_DATASETS = {"reference", "current"}
+
+
+def validate_dataset(df: pd.DataFrame, dataset_type: str) -> None:
+    """Validate that dataset is well-formed before it's persisted.
+
+    Checks: expected columns present (no missing/extra), no null values,
+    at least one row, no negative values in count/amount columns, and — for
+    labelled datasets — both fraud classes (0 and 1) are represented.
+
     Args:
         df: DataFrame to validate.
-        name: Name of the dataset for error messages.
-        
+        dataset_type: One of 'reference', 'current', 'feast'.
+
     Raises:
-        ValueError: If DataFrame contains NaN values or has zero rows.
+        ValueError: If validation fails.
     """
+    expected = EXPECTED_COLUMNS.get(dataset_type)
+    if expected is None:
+        raise ValueError(f"Unknown dataset type: {dataset_type}")
+
     if df.shape[0] == 0:
-        raise ValueError(f"{name} has zero rows")
-    if df.isna().any().any():
-        raise ValueError(f"{name} contains NaN values")
+        raise ValueError(f"{dataset_type} dataset has zero rows")
+
+    actual = set(df.columns)
+    missing = expected - actual
+    if missing:
+        raise ValueError(f"{dataset_type} dataset missing columns: {missing}")
+
+    extra = actual - expected
+    if extra:
+        raise ValueError(f"{dataset_type} dataset has unexpected columns: {extra}")
+
+    null_counts = df[list(expected)].isnull().sum()
+    if null_counts.any():
+        null_info = null_counts[null_counts > 0].to_dict()
+        raise ValueError(f"{dataset_type} dataset contains null values: {null_info}")
+
+    for col in NON_NEGATIVE_COLUMNS.get(dataset_type, set()):
+        if (df[col] < 0).any():
+            raise ValueError(f"{dataset_type} dataset: column '{col}' contains negative values")
+
+    if dataset_type in FRAUD_LABEL_DATASETS:
+        fraud_classes = set(df["is_fraud"].unique())
+        if fraud_classes != {0, 1}:
+            raise ValueError(
+                f"{dataset_type} dataset does not contain both fraud classes (0 and 1): got {fraud_classes}"
+            )
 
 
 def generate_reference_data(n_samples: int = 1000, seed: int = 42) -> pd.DataFrame:
@@ -75,23 +123,41 @@ def generate_feast_data(n_users: int = 100, seed: int = 42) -> pd.DataFrame:
     })
 
 
+def _write_file(df: pd.DataFrame, path: str, format: str = "csv") -> None:
+    """Write a DataFrame to disk, failing loudly instead of silently on error."""
+    try:
+        if format == "csv":
+            df.to_csv(path, index=False)
+        elif format == "parquet":
+            df.to_parquet(path, index=False)
+        else:
+            raise ValueError(f"Unsupported format: {format}")
+    except OSError as e:
+        print(f"Error: Failed to write {path} - {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    Path("data").mkdir(parents=True, exist_ok=True)
+    try:
+        Path("data").mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"Error: Failed to create data/ directory - {e}", file=sys.stderr)
+        sys.exit(1)
 
     ref = generate_reference_data()
-    _validate_dataframe(ref, "Reference data")
-    ref.to_csv("data/reference.csv", index=False)
+    validate_dataset(ref, "reference")
+    _write_file(ref, "data/reference.csv", format="csv")
 
     # SIMULATE_DRIFT=false → generate on-distribution current data (healthy run).
     # Defaults to true so the pipeline demonstrates self-healing out of the box.
     simulate_drift = os.getenv("SIMULATE_DRIFT", "true").lower() != "false"
     cur = generate_current_data(drift=simulate_drift)
-    _validate_dataframe(cur, "Current data")
-    cur.to_csv("data/current.csv", index=False)
+    validate_dataset(cur, "current")
+    _write_file(cur, "data/current.csv", format="csv")
 
     feast = generate_feast_data()
-    _validate_dataframe(feast, "Feast feature data")
-    feast.to_parquet("data/user_transactions.parquet", index=False)
+    validate_dataset(feast, "feast")
+    _write_file(feast, "data/user_transactions.parquet", format="parquet")
 
     print(f"Reference data: {ref.shape}")
     print(f"Current data (with drift): {cur.shape}")
