@@ -67,10 +67,40 @@ def run_drift_report(
 
     # Persist the full JSON report for downstream consumers
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(REPORT_PATH, "w") as f:
-        json.dump(result, f, indent=2)
+    try:
+        with open(REPORT_PATH, "w") as f:
+            json.dump(result, f, indent=2)
+        logger.info(f"Drift report persisted to {REPORT_PATH}")
+    except (IOError, OSError) as exc:
+        logger.error(f"Failed to write drift report to {REPORT_PATH}: {exc}")
+        raise RuntimeError(f"Unable to persist drift report: {exc}") from exc
+    except (TypeError, ValueError) as exc:
+        logger.error(f"Failed to serialize drift report to JSON: {exc}")
+        raise RuntimeError(f"Drift report serialization failed: {exc}") from exc
 
     return result
+
+
+def load_drift_report(path: Path = REPORT_PATH) -> dict:
+    """Load persisted drift report from JSON file.
+    
+    Raises RuntimeError if the file is missing or malformed.
+    """
+    if not path.exists():
+        logger.error(f"Drift report file not found: {path}")
+        raise RuntimeError(f"Drift report missing at {path}")
+    
+    try:
+        with open(path, "r") as f:
+            report_dict = json.load(f)
+        logger.debug(f"Loaded drift report from {path}")
+        return report_dict
+    except json.JSONDecodeError as exc:
+        logger.error(f"Drift report is malformed JSON at {path}: {exc}")
+        raise RuntimeError(f"Drift report is malformed JSON: {exc}") from exc
+    except (IOError, OSError) as exc:
+        logger.error(f"Failed to read drift report at {path}: {exc}")
+        raise RuntimeError(f"Unable to read drift report: {exc}") from exc
 
 
 def extract_drift_score(report_dict: dict) -> float:
@@ -95,6 +125,11 @@ def extract_drift_score(report_dict: dict) -> float:
 
 def main() -> float:
     """Run monitoring pipeline and return the drift score."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+    
     print("Loading datasets...")
     reference, current = load_datasets()
 
