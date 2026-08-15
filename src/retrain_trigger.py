@@ -45,6 +45,13 @@ def train_model(data_path: str = "data/reference.csv") -> RandomForestClassifier
     if y.isna().any() or X.isna().any().any():
         raise ValueError(f"NaN values detected in training data: {data_path}")
 
+    unique_classes = set(y.unique())
+    if unique_classes != {0, 1}:
+        raise ValueError(
+            f"Training data must contain both fraud classes (0 and 1), "
+            f"found: {sorted(unique_classes)} in {data_path}"
+        )
+
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
