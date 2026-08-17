@@ -5,6 +5,7 @@ dataset and reports per-column data drift scores.
 """
 
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -12,6 +13,8 @@ import pandas as pd
 from evidently.legacy.report import Report
 from evidently.legacy.metric_preset import DataDriftPreset
 
+
+logger = logging.getLogger(__name__)
 
 FEATURE_COLUMNS = [
     "user_transaction_count",
@@ -27,8 +30,24 @@ def load_datasets(
     current_path: str = "data/current.csv",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load reference and current datasets from CSV files."""
-    reference = pd.read_csv(reference_path)
-    current = pd.read_csv(current_path)
+    try:
+        reference = pd.read_csv(reference_path)
+    except FileNotFoundError as exc:
+        logger.error(f"Reference dataset not found at {reference_path}")
+        raise
+    except pd.errors.ParserError as exc:
+        logger.error(f"Failed to parse reference dataset at {reference_path}: {exc}")
+        raise
+
+    try:
+        current = pd.read_csv(current_path)
+    except FileNotFoundError as exc:
+        logger.error(f"Current dataset not found at {current_path}")
+        raise
+    except pd.errors.ParserError as exc:
+        logger.error(f"Failed to parse current dataset at {current_path}: {exc}")
+        raise
+
     for label, df in (("reference", reference), ("current", current)):
         missing = [c for c in FEATURE_COLUMNS if c not in df.columns]
         if missing:
