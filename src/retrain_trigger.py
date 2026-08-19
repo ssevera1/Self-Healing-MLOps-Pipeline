@@ -5,6 +5,7 @@ the configured threshold, retrains the fraud-detection model and saves a
 new versioned artifact.
 """
 
+import logging
 import os
 import sys
 from datetime import datetime, timezone
@@ -17,6 +18,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
 from src.monitor import main as run_monitor
+
+logger = logging.getLogger(__name__)
 
 DRIFT_THRESHOLD = float(os.getenv("DRIFT_THRESHOLD", "0.3"))
 MODELS_DIR = Path("models")
@@ -83,12 +86,20 @@ def save_model(model: RandomForestClassifier) -> Path:
 
 def heal() -> None:
     """Run the full self-healing loop: monitor → decide → retrain."""
-    drift_score = run_monitor()
+    try:
+        drift_score = run_monitor()
+    except Exception as e:
+        logger.error(f"Monitoring failed: {e}", exc_info=True)
+        print(f"Error during monitoring: {e}", file=sys.stderr)
+        sys.exit(1)
 
+    logger.info(f"Drift threshold: {DRIFT_THRESHOLD}")
+    logger.info(f"Current drift: {drift_score:.4f}")
     print(f"\nDrift threshold: {DRIFT_THRESHOLD}")
     print(f"Current drift:   {drift_score:.4f}")
 
     if drift_score >= DRIFT_THRESHOLD:
+        logger.warning(f"Drift detected (score {drift_score:.4f} >= {DRIFT_THRESHOLD}). Triggering retraining...")
         print("Drift Detected! Triggering retraining...")
         # Retrain on the *current* (drifted) data so the new model fits the
         # production distribution, not the stale reference distribution.
@@ -100,6 +111,7 @@ def heal() -> None:
             print(f"Error during retraining: {e}", file=sys.stderr)
             sys.exit(1)
     else:
+        logger.info(f"No significant drift detected (score {drift_score:.4f} < {DRIFT_THRESHOLD}).")
         print("No significant drift detected. Model is healthy.")
 
 
