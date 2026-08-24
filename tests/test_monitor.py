@@ -11,6 +11,7 @@ from src.monitor import (
     FEATURE_COLUMNS,
     extract_drift_score,
     load_datasets,
+    load_drift_report,
     run_drift_report,
 )
 
@@ -165,3 +166,75 @@ class TestDriftDetection:
         result = run_drift_report(ref, cur)
         score = extract_drift_score(result)
         assert 0.0 <= score <= 1.0
+
+
+class TestLoadDriftReport:
+    """Cover the persistence round-trip and both failure branches."""
+
+    def test_round_trip_follows_reassigned_report_path(
+        self, reference_df, current_no_drift_df, tmp_path, monkeypatch
+    ):
+        """load_drift_report must resolve REPORT_PATH at call time, like run_drift_report."""
+        import src.monitor as monitor_mod
+
+        tmp = tmp_path / "report.json"
+        monkeypatch.setattr(monitor_mod, "REPORT_PATH", tmp)
+
+        written = run_drift_report(
+            reference_df[FEATURE_COLUMNS], current_no_drift_df[FEATURE_COLUMNS]
+        )
+        loaded = load_drift_report()
+
+        assert tmp.exists()
+        assert "metrics" in loaded
+        assert loaded == json.loads(json.dumps(written))
+
+    def test_missing_file_raises_runtime_error(self, tmp_path):
+        with pytest.raises(RuntimeError, match="Drift report missing"):
+            load_drift_report(tmp_path / "absent.json")
+
+    def test_malformed_json_raises_runtime_error(self, tmp_path):
+        bad = tmp_path / "report.json"
+        bad.write_text("{not valid json", encoding="utf-8")
+
+        with pytest.raises(RuntimeError, match="malformed JSON"):
+            load_drift_report(bad)
+
+    def test_explicit_path_argument_wins_over_global(self, tmp_path, monkeypatch):
+        import src.monitor as monitor_mod
+
+        monkeypatch.setattr(monitor_mod, "REPORT_PATH", tmp_path / "global.json")
+        explicit = tmp_path / "explicit.json"
+        explicit.write_text('{"metrics": []}', encoding="utf-8")
+
+        assert load_drift_report(explicit) == {"metrics": []}
+
+
+class TestReportWriteIsAtomic:
+    """A failed write must not destroy the previous good report."""
+
+    def test_serialization_failure_leaves_existing_report_intact(
+        self, tmp_path, monkeypatch
+    ):
+        import src.monitor as monitor_mod
+
+        target = tmp_path / "report.json"
+        target.write_text('{"metrics": ["previous good report"]}', encoding="utf-8")
+        monkeypatch.setattr(monitor_mod, "REPORT_PATH", target)
+
+        # A set is not JSON-serializable; json.dump raises partway through.
+        with pytest.raises(RuntimeError, match="serialization failed"):
+            monitor_mod._write_report_atomically({"bad": {1, 2, 3}}, target)
+
+        assert json.loads(target.read_text(encoding="utf-8")) == {
+            "metrics": ["previous good report"]
+        }
+
+    def test_failed_write_leaves_no_temp_files_behind(self, tmp_path):
+        import src.monitor as monitor_mod
+
+        target = tmp_path / "report.json"
+        with pytest.raises(RuntimeError):
+            monitor_mod._write_report_atomically({"bad": {1, 2, 3}}, target)
+
+        assert list(tmp_path.iterdir()) == []
