@@ -6,7 +6,9 @@ dataset and reports per-column data drift scores.
 
 import json
 import logging
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -66,11 +68,67 @@ def run_drift_report(
     result = report.as_dict()
 
     # Persist the full JSON report for downstream consumers
-    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(REPORT_PATH, "w") as f:
-        json.dump(result, f, indent=2)
+    _write_report_atomically(result, REPORT_PATH)
 
     return result
+
+
+def _write_report_atomically(result: dict, path: Path) -> None:
+    """Serialize to a sibling temp file, then os.replace() it into place.
+
+    Writing in place would truncate the previous good report before
+    json.dump streams the new one, so a mid-write failure would leave
+    invalid JSON on disk - which load_drift_report would then misreport as
+    "malformed JSON" rather than a write failure, and which
+    .github/workflows/mlops.yml uploads as an artifact via `if: always()`.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(result, f, indent=2)
+        os.replace(tmp_path, path)
+    except (TypeError, ValueError) as exc:
+        tmp_path.unlink(missing_ok=True)
+        logger.error("Failed to serialize drift report to JSON: %s", exc)
+        raise RuntimeError(f"Drift report serialization failed: {exc}") from exc
+    except (IOError, OSError) as exc:
+        tmp_path.unlink(missing_ok=True)
+        logger.error("Failed to write drift report to %s: %s", path, exc)
+        raise RuntimeError(f"Unable to persist drift report: {exc}") from exc
+    logger.info("Drift report persisted to %s", path)
+
+
+def load_drift_report(path: Path | None = None) -> dict:
+    """Load persisted drift report from JSON file.
+
+    REPORT_PATH is resolved at call time, not bound as a default, so this
+    stays in step with run_drift_report when the module global is
+    reassigned (which tests/test_monitor.py does).
+
+    Raises RuntimeError if the file is missing or malformed.
+    """
+    path = path if path is not None else REPORT_PATH
+
+    if not path.exists():
+        logger.error("Drift report file not found: %s", path)
+        raise RuntimeError(f"Drift report missing at {path}")
+
+    try:
+        with open(path, "r") as f:
+            report_dict = json.load(f)
+    except json.JSONDecodeError as exc:
+        logger.error("Drift report is malformed JSON at %s: %s", path, exc)
+        raise RuntimeError(f"Drift report is malformed JSON: {exc}") from exc
+    except (IOError, OSError) as exc:
+        logger.error("Failed to read drift report at %s: %s", path, exc)
+        raise RuntimeError(f"Unable to read drift report: {exc}") from exc
+
+    logger.debug("Loaded drift report from %s", path)
+    return report_dict
 
 
 def extract_drift_score(report_dict: dict) -> float:
@@ -95,6 +153,11 @@ def extract_drift_score(report_dict: dict) -> float:
 
 def main() -> float:
     """Run monitoring pipeline and return the drift score."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+    
     print("Loading datasets...")
     reference, current = load_datasets()
 
