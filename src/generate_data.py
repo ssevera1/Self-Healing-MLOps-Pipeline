@@ -42,6 +42,9 @@ def validate_dataset(df: pd.DataFrame, dataset_type: str) -> None:
         null_info = null_counts[null_counts > 0].to_dict()
         raise ValueError(f"{dataset_type} dataset contains null values: {null_info}")
 
+    if len(df) == 0:
+        raise ValueError(f"{dataset_type} dataset has no rows")
+
 
 def generate_reference_data(n_samples: int = 1000, seed: int = 42) -> pd.DataFrame:
     """Generate a stable reference (historical) dataset."""
