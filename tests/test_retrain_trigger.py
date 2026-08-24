@@ -196,6 +196,42 @@ class TestHeal:
         output = capsys.readouterr().out
         assert "Drift Detected!" in output
 
+    def test_heal_full_loop_with_drift_and_persistence(self, training_csv, monkeypatch, capsys):
+        """Test complete heal() loop: drift detection, retraining, and model saving."""
+        import src.retrain_trigger as trigger_mod
+        import tempfile
+
+        tmp = Path(tempfile.mkdtemp()) / "models"
+        monkeypatch.setattr(trigger_mod, "MODELS_DIR", tmp)
+
+        with patch("src.retrain_trigger.run_monitor", return_value=0.75):
+            with patch("src.retrain_trigger.train_model", wraps=train_model) as mock_train:
+                heal(training_csv)
+                mock_train.assert_called_once()
+
+        output = capsys.readouterr().out
+        assert "Drift Detected! Triggering retraining..." in output
+        assert tmp.exists()
+        assert list(tmp.glob("*.pkl"))
+
+    def test_heal_full_loop_skips_on_low_drift(self, training_csv, monkeypatch, capsys):
+        """Test complete heal() loop with low drift and no persistence."""
+        import src.retrain_trigger as trigger_mod
+        import tempfile
+
+        tmp = Path(tempfile.mkdtemp()) / "models"
+        monkeypatch.setattr(trigger_mod, "MODELS_DIR", tmp)
+
+        with patch("src.retrain_trigger.run_monitor", return_value=0.15):
+            with patch("src.retrain_trigger.train_model") as mock_train:
+                heal(training_csv)
+                mock_train.assert_not_called()
+
+        output = capsys.readouterr().out
+        assert "No significant drift detected. Model is healthy." in output
+        if tmp.exists():
+            assert not list(tmp.glob("*.pkl"))
+
 
 # ── Configuration ─────────────────────────────────────────────────────────
 
