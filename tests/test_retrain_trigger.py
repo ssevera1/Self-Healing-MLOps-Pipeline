@@ -196,6 +196,48 @@ class TestHeal:
         output = capsys.readouterr().out
         assert "Drift Detected!" in output
 
+    def test_heal_full_loop_with_drift_and_persistence(
+        self, training_csv, tmp_path, monkeypatch, capsys
+    ):
+        """Test complete heal() loop: drift detection, retraining, and model saving."""
+        import src.retrain_trigger as trigger_mod
+
+        tmp = tmp_path / "models"
+        monkeypatch.setattr(trigger_mod, "MODELS_DIR", tmp)
+
+        # heal() hardcodes data_path="data/current.csv", which does not exist in
+        # the repo, so redirect the real training run at the fixture CSV instead
+        # of letting it read that path.
+        with patch("src.retrain_trigger.run_monitor", return_value=0.75):
+            with patch(
+                "src.retrain_trigger.train_model",
+                side_effect=lambda **kw: train_model(data_path=training_csv),
+            ) as mock_train:
+                heal()
+                mock_train.assert_called_once_with(data_path="data/current.csv")
+
+        output = capsys.readouterr().out
+        assert "Drift Detected! Triggering retraining..." in output
+        assert "Self-healing retraining complete." in output
+        assert tmp.exists()
+        assert list(tmp.glob("*.pkl"))
+
+    def test_heal_full_loop_skips_on_low_drift(self, tmp_path, monkeypatch, capsys):
+        """Test complete heal() loop with low drift and no persistence."""
+        import src.retrain_trigger as trigger_mod
+
+        tmp = tmp_path / "models"
+        monkeypatch.setattr(trigger_mod, "MODELS_DIR", tmp)
+
+        with patch("src.retrain_trigger.run_monitor", return_value=0.15):
+            with patch("src.retrain_trigger.train_model") as mock_train:
+                heal()
+                mock_train.assert_not_called()
+
+        output = capsys.readouterr().out
+        assert "No significant drift detected. Model is healthy." in output
+        assert not tmp.exists()
+
 
 # ── Configuration ─────────────────────────────────────────────────────────
 
