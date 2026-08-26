@@ -13,6 +13,9 @@ EXPECTED_COLUMNS = {
     "feast": {"user_id", "event_timestamp", "user_transaction_count", "user_transaction_amount_avg", "user_transaction_amount_max"},
 }
 
+MIN_FRAUD_FRACTION = 0.01
+MIN_LEGITIMATE_FRACTION = 0.01
+
 
 def validate_dataset(df: pd.DataFrame, dataset_type: str) -> None:
     """Validate that dataset contains expected columns and has no null values.
@@ -44,6 +47,38 @@ def validate_dataset(df: pd.DataFrame, dataset_type: str) -> None:
 
     if len(df) == 0:
         raise ValueError(f"{dataset_type} dataset has no rows")
+
+
+def validate_fraud_distribution(df: pd.DataFrame, dataset_type: str) -> None:
+    """Validate that fraud class distribution meets minimum thresholds.
+    
+    Args:
+        df: DataFrame to validate.
+        dataset_type: One of 'reference', 'current'.
+        
+    Raises:
+        ValueError: If fraud or legitimate class fraction falls below threshold.
+    """
+    if dataset_type not in ("reference", "current"):
+        return
+    
+    fraud_count = (df["is_fraud"] == 1).sum()
+    total_count = len(df)
+    
+    fraud_fraction = fraud_count / total_count if total_count > 0 else 0
+    legitimate_fraction = 1 - fraud_fraction
+    
+    if fraud_fraction < MIN_FRAUD_FRACTION:
+        raise ValueError(
+            f"{dataset_type} dataset: fraud class fraction {fraud_fraction:.4f} "
+            f"below minimum threshold {MIN_FRAUD_FRACTION}"
+        )
+    
+    if legitimate_fraction < MIN_LEGITIMATE_FRACTION:
+        raise ValueError(
+            f"{dataset_type} dataset: legitimate class fraction {legitimate_fraction:.4f} "
+            f"below minimum threshold {MIN_LEGITIMATE_FRACTION}"
+        )
 
 
 def generate_reference_data(n_samples: int = 1000, seed: int = 42) -> pd.DataFrame:
@@ -103,6 +138,7 @@ if __name__ == "__main__":
 
     ref = generate_reference_data()
     validate_dataset(ref, "reference")
+    validate_fraud_distribution(ref, "reference")
     ref.to_csv("data/reference.csv", index=False)
 
     # SIMULATE_DRIFT=false → generate on-distribution current data (healthy run).
@@ -110,6 +146,7 @@ if __name__ == "__main__":
     simulate_drift = os.getenv("SIMULATE_DRIFT", "true").lower() != "false"
     cur = generate_current_data(drift=simulate_drift)
     validate_dataset(cur, "current")
+    validate_fraud_distribution(cur, "current")
     cur.to_csv("data/current.csv", index=False)
 
     feast = generate_feast_data()
