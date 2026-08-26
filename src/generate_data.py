@@ -13,6 +13,8 @@ EXPECTED_COLUMNS = {
     "feast": {"user_id", "event_timestamp", "user_transaction_count", "user_transaction_amount_avg", "user_transaction_amount_max"},
 }
 
+LABEL_COLUMN = "is_fraud"
+
 MIN_FRAUD_FRACTION = 0.01
 MIN_LEGITIMATE_FRACTION = 0.01
 
@@ -51,29 +53,37 @@ def validate_dataset(df: pd.DataFrame, dataset_type: str) -> None:
 
 def validate_fraud_distribution(df: pd.DataFrame, dataset_type: str) -> None:
     """Validate that fraud class distribution meets minimum thresholds.
-    
+
+    Dataset types with no label column (e.g. 'feast') are skipped; an
+    unrecognised type is an error, matching validate_dataset.
+
     Args:
         df: DataFrame to validate.
-        dataset_type: One of 'reference', 'current'.
-        
+        dataset_type: One of 'reference', 'current', 'feast'.
+
     Raises:
-        ValueError: If fraud or legitimate class fraction falls below threshold.
+        ValueError: If the dataset type is unknown, or if the fraud or
+            legitimate class fraction falls below threshold.
     """
-    if dataset_type not in ("reference", "current"):
+    expected = EXPECTED_COLUMNS.get(dataset_type)
+    if expected is None:
+        raise ValueError(f"Unknown dataset type: {dataset_type}")
+
+    if LABEL_COLUMN not in expected:
         return
-    
-    fraud_count = (df["is_fraud"] == 1).sum()
+
+    fraud_count = (df[LABEL_COLUMN] == 1).sum()
     total_count = len(df)
-    
+
     fraud_fraction = fraud_count / total_count if total_count > 0 else 0
     legitimate_fraction = 1 - fraud_fraction
-    
+
     if fraud_fraction < MIN_FRAUD_FRACTION:
         raise ValueError(
             f"{dataset_type} dataset: fraud class fraction {fraud_fraction:.4f} "
             f"below minimum threshold {MIN_FRAUD_FRACTION}"
         )
-    
+
     if legitimate_fraction < MIN_LEGITIMATE_FRACTION:
         raise ValueError(
             f"{dataset_type} dataset: legitimate class fraction {legitimate_fraction:.4f} "
