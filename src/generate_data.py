@@ -33,6 +33,9 @@ def validate_dataset(df: pd.DataFrame, dataset_type: str) -> None:
     if expected is None:
         raise ValueError(f"Unknown dataset type: {dataset_type}")
     
+    if len(df) == 0:
+        raise ValueError(f"{dataset_type} dataset has no rows")
+    
     actual = set(df.columns)
     missing = expected - actual
     if missing:
@@ -46,9 +49,6 @@ def validate_dataset(df: pd.DataFrame, dataset_type: str) -> None:
     if null_counts.any():
         null_info = null_counts[null_counts > 0].to_dict()
         raise ValueError(f"{dataset_type} dataset contains null values: {null_info}")
-
-    if len(df) == 0:
-        raise ValueError(f"{dataset_type} dataset has no rows")
 
 
 def validate_fraud_distribution(df: pd.DataFrame, dataset_type: str) -> None:
