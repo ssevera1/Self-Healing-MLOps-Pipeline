@@ -106,6 +106,18 @@ class TestRunDriftReport:
         metric_names = [m.get("metric", "") for m in result["metrics"]]
         assert "DatasetDriftMetric" in metric_names
 
+    def test_raises_on_missing_column_in_current(self, reference_df, current_no_drift_df):
+        ref = reference_df[FEATURE_COLUMNS]
+        cur = current_no_drift_df[FEATURE_COLUMNS].drop(columns=[FEATURE_COLUMNS[0]])
+        with pytest.raises(ValueError, match="current dataset is missing expected columns"):
+            run_drift_report(ref, cur)
+
+    def test_raises_on_missing_column_in_reference(self, reference_df, current_no_drift_df):
+        ref = reference_df[FEATURE_COLUMNS].drop(columns=[FEATURE_COLUMNS[0]])
+        cur = current_no_drift_df[FEATURE_COLUMNS]
+        with pytest.raises(ValueError, match="reference dataset is missing expected columns"):
+            run_drift_report(ref, cur)
+
 
 # ── extract_drift_score ───────────────────────────────────────────────────
 

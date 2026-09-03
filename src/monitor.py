@@ -27,6 +27,13 @@ FEATURE_COLUMNS = [
 REPORT_PATH = Path("data/drift_report.json")
 
 
+def _validate_feature_columns(label: str, df: pd.DataFrame) -> None:
+    """Raise ValueError if df is missing any of FEATURE_COLUMNS."""
+    missing = [c for c in FEATURE_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(f"{label} dataset is missing expected columns: {missing}")
+
+
 def load_datasets(
     reference_path: str = "data/reference.csv",
     current_path: str = "data/current.csv",
@@ -51,9 +58,7 @@ def load_datasets(
         raise
 
     for label, df in (("reference", reference), ("current", current)):
-        missing = [c for c in FEATURE_COLUMNS if c not in df.columns]
-        if missing:
-            raise ValueError(f"{label} dataset is missing expected columns: {missing}")
+        _validate_feature_columns(label, df)
     return reference[FEATURE_COLUMNS], current[FEATURE_COLUMNS]
 
 
@@ -62,11 +67,9 @@ def run_drift_report(
     current: pd.DataFrame,
 ) -> dict:
     """Run an Evidently DataDrift report and return the result dict."""
-    # Validate that feature columns exist in loaded datasets
+    # Validate that feature columns exist, in case a caller bypasses load_datasets.
     for label, df in (("reference", reference), ("current", current)):
-        missing = [c for c in FEATURE_COLUMNS if c not in df.columns]
-        if missing:
-            raise ValueError(f"{label} dataset is missing expected columns: {missing}")
+        _validate_feature_columns(label, df)
 
     report = Report(metrics=[DataDriftPreset()])
     report.run(reference_data=reference, current_data=current)
@@ -156,7 +159,7 @@ def extract_drift_score(report_dict: dict) -> float:
                 ) from exc
     # Metric not present — treat as no drift detected (fail-safe: don't retrain
     # on ambiguous report data).
-    logger.info("Drift score extracted: 0.0000")
+    logger.warning("DatasetDriftMetric not present in report; defaulting drift score to 0.0")
     return 0.0
 
 
