@@ -62,6 +62,12 @@ def run_drift_report(
     current: pd.DataFrame,
 ) -> dict:
     """Run an Evidently DataDrift report and return the result dict."""
+    # Validate that feature columns exist in loaded datasets
+    for label, df in (("reference", reference), ("current", current)):
+        missing = [c for c in FEATURE_COLUMNS if c not in df.columns]
+        if missing:
+            raise ValueError(f"{label} dataset is missing expected columns: {missing}")
+
     report = Report(metrics=[DataDriftPreset()])
     report.run(reference_data=reference, current_data=current)
 
@@ -141,13 +147,16 @@ def extract_drift_score(report_dict: dict) -> float:
         metric_id = metric.get("metric", "")
         if metric_id == "DatasetDriftMetric":
             try:
-                return float(metric["result"]["drift_share"])
+                drift_score = float(metric["result"]["drift_share"])
+                logger.info("Drift score extracted: %.4f", drift_score)
+                return drift_score
             except KeyError as exc:
                 raise RuntimeError(
                     f"Unexpected Evidently report schema — missing key: {exc}"
                 ) from exc
     # Metric not present — treat as no drift detected (fail-safe: don't retrain
     # on ambiguous report data).
+    logger.info("Drift score extracted: 0.0000")
     return 0.0
 
 
