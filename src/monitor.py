@@ -146,16 +146,24 @@ def extract_drift_score(report_dict: dict) -> float:
     The drift share is the fraction of columns that are detected as drifted
     (value between 0.0 and 1.0).
     """
+    logger.debug("Extracting drift score from report with %d metrics", len(report_dict.get("metrics", [])))
     for metric in report_dict["metrics"]:
         metric_id = metric.get("metric", "")
         if metric_id == "DatasetDriftMetric":
+            logger.debug("Found DatasetDriftMetric, extracting drift_share")
             try:
                 drift_score = float(metric["result"]["drift_share"])
                 logger.info("Drift score extracted: %.4f", drift_score)
                 return drift_score
             except KeyError as exc:
+                logger.error("Failed to extract drift_share from DatasetDriftMetric: missing key %s", exc)
                 raise RuntimeError(
                     f"Unexpected Evidently report schema — missing key: {exc}"
+                ) from exc
+            except (ValueError, TypeError) as exc:
+                logger.error("Failed to convert drift_share to float: %s", exc)
+                raise RuntimeError(
+                    f"Unexpected Evidently report schema — drift_share is malformed: {exc}"
                 ) from exc
     # Metric not present — treat as no drift detected (fail-safe: don't retrain
     # on ambiguous report data).
