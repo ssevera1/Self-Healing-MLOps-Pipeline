@@ -146,17 +146,46 @@ def extract_drift_score(report_dict: dict) -> float:
     The drift share is the fraction of columns that are detected as drifted
     (value between 0.0 and 1.0).
     """
-    logger.debug("Extracting drift score from report with %d metrics", len(report_dict.get("metrics", [])))
-    for metric in report_dict["metrics"]:
+    if not isinstance(report_dict, dict):
+        logger.error("Drift report is not a dict: %s", type(report_dict))
+        raise RuntimeError("Drift report must be a dict")
+
+    metrics = report_dict.get("metrics")
+    if not isinstance(metrics, list):
+        logger.error(
+            "Drift report 'metrics' field is malformed: expected list, got %s",
+            type(metrics),
+        )
+        raise RuntimeError("Drift report 'metrics' field must be a list")
+
+    logger.debug("Extracting drift score from report with %d metrics", len(metrics))
+    for metric in metrics:
+        if not isinstance(metric, dict):
+            logger.warning("Skipping non-dict metric entry: %s", type(metric))
+            continue
+
         metric_id = metric.get("metric", "")
         if metric_id == "DatasetDriftMetric":
             logger.debug("Found DatasetDriftMetric, extracting drift_share")
+            result = metric.get("result")
+            if not isinstance(result, dict):
+                logger.error(
+                    "DatasetDriftMetric 'result' field is malformed: expected dict, got %s",
+                    type(result),
+                )
+                raise RuntimeError(
+                    "Unexpected Evidently report schema — 'result' must be a dict"
+                )
+
             try:
-                drift_score = float(metric["result"]["drift_share"])
+                drift_score = float(result["drift_share"])
                 logger.info("Drift score extracted: %.4f", drift_score)
                 return drift_score
             except KeyError as exc:
-                logger.error("Failed to extract drift_share from DatasetDriftMetric: missing key %s", exc)
+                logger.error(
+                    "Failed to extract drift_share from DatasetDriftMetric: missing key %s",
+                    exc,
+                )
                 raise RuntimeError(
                     f"Unexpected Evidently report schema — missing key: {exc}"
                 ) from exc
