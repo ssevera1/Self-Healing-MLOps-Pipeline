@@ -62,6 +62,27 @@ def load_datasets(
     return reference[FEATURE_COLUMNS], current[FEATURE_COLUMNS]
 
 
+def _validate_drift_report_structure(report_dict: dict) -> None:
+    """Validate drift report structure before extraction.
+    
+    Raises RuntimeError if report structure is invalid.
+    """
+    if not isinstance(report_dict, dict):
+        logger.error("Drift report is not a dict: %s", type(report_dict))
+        raise RuntimeError("Drift report must be a dict")
+
+    metrics = report_dict.get("metrics")
+    if not isinstance(metrics, list):
+        logger.error(
+            "Drift report 'metrics' field is malformed: expected list, got %s",
+            type(metrics),
+        )
+        raise RuntimeError("Drift report 'metrics' field must be a list")
+
+    if not metrics:
+        logger.warning("Drift report has empty metrics list")
+
+
 def run_drift_report(
     reference: pd.DataFrame,
     current: pd.DataFrame,
@@ -146,18 +167,9 @@ def extract_drift_score(report_dict: dict) -> float:
     The drift share is the fraction of columns that are detected as drifted
     (value between 0.0 and 1.0).
     """
-    if not isinstance(report_dict, dict):
-        logger.error("Drift report is not a dict: %s", type(report_dict))
-        raise RuntimeError("Drift report must be a dict")
+    _validate_drift_report_structure(report_dict)
 
     metrics = report_dict.get("metrics")
-    if not isinstance(metrics, list):
-        logger.error(
-            "Drift report 'metrics' field is malformed: expected list, got %s",
-            type(metrics),
-        )
-        raise RuntimeError("Drift report 'metrics' field must be a list")
-
     logger.debug("Extracting drift score from report with %d metrics", len(metrics))
     for metric in metrics:
         if not isinstance(metric, dict):
