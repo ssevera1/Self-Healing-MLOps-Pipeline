@@ -62,9 +62,12 @@ def load_datasets(
     return reference[FEATURE_COLUMNS], current[FEATURE_COLUMNS]
 
 
-def _validate_drift_report_structure(report_dict: dict) -> None:
-    """Validate drift report structure before extraction.
-    
+def _validate_drift_report_structure(report_dict: dict) -> list:
+    """Validate drift report structure and return its metrics list.
+
+    Returning the validated list lets callers use it with a concrete type
+    instead of re-reading it from the dict as ``Any | None``.
+
     Raises RuntimeError if report structure is invalid.
     """
     if not isinstance(report_dict, dict):
@@ -81,6 +84,8 @@ def _validate_drift_report_structure(report_dict: dict) -> None:
 
     if not metrics:
         logger.warning("Drift report has empty metrics list")
+
+    return metrics
 
 
 def run_drift_report(
@@ -167,9 +172,7 @@ def extract_drift_score(report_dict: dict) -> float:
     The drift share is the fraction of columns that are detected as drifted
     (value between 0.0 and 1.0).
     """
-    _validate_drift_report_structure(report_dict)
-
-    metrics = report_dict.get("metrics")
+    metrics = _validate_drift_report_structure(report_dict)
     logger.debug("Extracting drift score from report with %d metrics", len(metrics))
     for metric in metrics:
         if not isinstance(metric, dict):
