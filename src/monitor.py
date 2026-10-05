@@ -192,18 +192,18 @@ def extract_drift_score(report_dict: dict) -> float:
                     "Unexpected Evidently report schema — 'result' must be a dict"
                 )
 
+            if "drift_share" not in result:
+                logger.error(
+                    "DatasetDriftMetric 'result' is missing 'drift_share' key"
+                )
+                raise RuntimeError(
+                    "Unexpected Evidently report schema — missing 'drift_share' key"
+                )
+
             try:
                 drift_score = float(result["drift_share"])
                 logger.info("Drift score extracted: %.4f", drift_score)
                 return drift_score
-            except KeyError as exc:
-                logger.error(
-                    "Failed to extract drift_share from DatasetDriftMetric: missing key %s",
-                    exc,
-                )
-                raise RuntimeError(
-                    f"Unexpected Evidently report schema — missing key: {exc}"
-                ) from exc
             except (ValueError, TypeError) as exc:
                 logger.error("Failed to convert drift_share to float: %s", exc)
                 raise RuntimeError(
