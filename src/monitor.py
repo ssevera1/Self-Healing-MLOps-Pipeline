@@ -4,11 +4,13 @@ Compares a reference (historical) dataset against a current (new logs)
 dataset and reports per-column data drift scores.
 """
 
+import concurrent.futures
 import json
 import logging
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +28,10 @@ FEATURE_COLUMNS = [
 
 REPORT_PATH = Path("data/drift_report.json")
 
+_LOAD_DATASETS_MAX_RETRIES = 3
+_LOAD_DATASETS_RETRY_DELAY_SECS = 1.0
+_LOAD_DATASETS_READ_TIMEOUT_SECS = 30.0
+
 
 def _validate_feature_columns(label: str, df: pd.DataFrame) -> None:
     """Raise ValueError if df is missing any of FEATURE_COLUMNS."""
@@ -34,28 +40,67 @@ def _validate_feature_columns(label: str, df: pd.DataFrame) -> None:
         raise ValueError(f"{label} dataset is missing expected columns: {missing}")
 
 
+def _read_csv_with_timeout(
+    path: str,
+    timeout_secs: float = _LOAD_DATASETS_READ_TIMEOUT_SECS,
+) -> pd.DataFrame:
+    """Read CSV file, raising TimeoutError if it exceeds timeout_secs.
+
+    Runs the read in a worker thread rather than using signal.alarm,
+    since SIGALRM only works on the main thread and is POSIX-only.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(pd.read_csv, path)
+        try:
+            return future.result(timeout=timeout_secs)
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError(
+                f"CSV read of {path} exceeded {timeout_secs}s timeout"
+            ) from None
+
+
 def load_datasets(
     reference_path: str = "data/reference.csv",
     current_path: str = "data/current.csv",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load reference and current datasets from CSV files."""
-    try:
-        reference = pd.read_csv(reference_path)
-    except FileNotFoundError as exc:
-        logger.error(f"Reference dataset not found at {reference_path}")
-        raise
-    except pd.errors.ParserError as exc:
-        logger.error(f"Failed to parse reference dataset at {reference_path}: {exc}")
-        raise
+    """Load reference and current datasets from CSV files with retry logic.
 
-    try:
-        current = pd.read_csv(current_path)
-    except FileNotFoundError as exc:
-        logger.error(f"Current dataset not found at {current_path}")
-        raise
-    except pd.errors.ParserError as exc:
-        logger.error(f"Failed to parse current dataset at {current_path}: {exc}")
-        raise
+    Retries transient read failures (OSError, e.g. disk delays or temporary
+    unavailability, and read timeouts) up to _LOAD_DATASETS_MAX_RETRIES
+    times with exponential backoff. A malformed CSV (ParserError) fails
+    immediately since it will fail identically on every retry.
+    """
+    def _load_single_dataset(path: str, label: str) -> pd.DataFrame:
+        """Load a single CSV with retries on transient failures."""
+        for attempt in range(_LOAD_DATASETS_MAX_RETRIES):
+            try:
+                return _read_csv_with_timeout(path)
+            except FileNotFoundError:
+                logger.error(f"{label} dataset not found at {path}")
+                raise
+            except pd.errors.ParserError:
+                logger.error(f"Failed to parse {label} dataset at {path}")
+                raise
+            except (OSError, TimeoutError) as exc:
+                if attempt < _LOAD_DATASETS_MAX_RETRIES - 1:
+                    wait_time = _LOAD_DATASETS_RETRY_DELAY_SECS * (2 ** attempt)
+                    logger.warning(
+                        f"Failed to load {label} dataset from {path} (attempt {attempt + 1}/{_LOAD_DATASETS_MAX_RETRIES}): {exc}. "
+                        f"Retrying in {wait_time}s..."
+                    )
+                    time.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"Failed to load {label} dataset from {path} after {_LOAD_DATASETS_MAX_RETRIES} attempts: {exc}"
+                    )
+                    raise
+        raise RuntimeError(
+            f"Failed to load {label} dataset from {path}: _LOAD_DATASETS_MAX_RETRIES "
+            f"is {_LOAD_DATASETS_MAX_RETRIES}, so no read attempt was made"
+        )
+
+    reference = _load_single_dataset(reference_path, "reference")
+    current = _load_single_dataset(current_path, "current")
 
     for label, df in (("reference", reference), ("current", current)):
         _validate_feature_columns(label, df)
