@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +27,10 @@ FEATURE_COLUMNS = [
 
 REPORT_PATH = Path("data/drift_report.json")
 
+_LOAD_DATASETS_MAX_RETRIES = 3
+_LOAD_DATASETS_RETRY_DELAY_SECS = 1.0
+_LOAD_DATASETS_READ_TIMEOUT_SECS = 30.0
+
 
 def _validate_feature_columns(label: str, df: pd.DataFrame) -> None:
     """Raise ValueError if df is missing any of FEATURE_COLUMNS."""
@@ -34,28 +39,67 @@ def _validate_feature_columns(label: str, df: pd.DataFrame) -> None:
         raise ValueError(f"{label} dataset is missing expected columns: {missing}")
 
 
+def _read_csv_with_timeout(
+    path: str,
+    timeout_secs: float = _LOAD_DATASETS_READ_TIMEOUT_SECS,
+) -> pd.DataFrame:
+    """Read CSV file with timeout enforcement.
+    
+    Raises TimeoutError if read exceeds timeout_secs.
+    """
+    import signal
+    
+    def timeout_handler(signum, frame):
+        raise TimeoutError(f"CSV read exceeded {timeout_secs}s timeout")
+    
+    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(int(timeout_secs) + 1)  # Add 1s margin
+    try:
+        df = pd.read_csv(path)
+        signal.alarm(0)
+        return df
+    finally:
+        signal.signal(signal.SIGALRM, old_handler)
+        signal.alarm(0)
+
+
 def load_datasets(
     reference_path: str = "data/reference.csv",
     current_path: str = "data/current.csv",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load reference and current datasets from CSV files."""
-    try:
-        reference = pd.read_csv(reference_path)
-    except FileNotFoundError as exc:
-        logger.error(f"Reference dataset not found at {reference_path}")
-        raise
-    except pd.errors.ParserError as exc:
-        logger.error(f"Failed to parse reference dataset at {reference_path}: {exc}")
-        raise
-
-    try:
-        current = pd.read_csv(current_path)
-    except FileNotFoundError as exc:
-        logger.error(f"Current dataset not found at {current_path}")
-        raise
-    except pd.errors.ParserError as exc:
-        logger.error(f"Failed to parse current dataset at {current_path}: {exc}")
-        raise
+    """Load reference and current datasets from CSV files with retry logic.
+    
+    Retries transient read failures up to _LOAD_DATASETS_MAX_RETRIES times
+    with exponential backoff.
+    """
+    def _load_single_dataset(path: str, label: str) -> pd.DataFrame:
+        """Load a single CSV with retries on transient failures."""
+        last_exc = None
+        
+        for attempt in range(_LOAD_DATASETS_MAX_RETRIES):
+            try:
+                return _read_csv_with_timeout(path)
+            except FileNotFoundError as exc:
+                logger.error(f"{label} dataset not found at {path}")
+                raise
+            except (pd.errors.ParserError, TimeoutError) as exc:
+                last_exc = exc
+                if attempt < _LOAD_DATASETS_MAX_RETRIES - 1:
+                    wait_time = _LOAD_DATASETS_RETRY_DELAY_SECS * (2 ** attempt)
+                    logger.warning(
+                        f"Failed to load {label} dataset from {path} (attempt {attempt + 1}/{_LOAD_DATASETS_MAX_RETRIES}): {exc}. "
+                        f"Retrying in {wait_time}s..."
+                    )
+                    time.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"Failed to load {label} dataset from {path} after {_LOAD_DATASETS_MAX_RETRIES} attempts: {exc}"
+                    )
+        
+        raise last_exc
+    
+    reference = _load_single_dataset(reference_path, "reference")
+    current = _load_single_dataset(current_path, "current")
 
     for label, df in (("reference", reference), ("current", current)):
         _validate_feature_columns(label, df)
@@ -209,8 +253,6 @@ def extract_drift_score(report_dict: dict) -> float:
                 raise RuntimeError(
                     f"Unexpected Evidently report schema — drift_share is malformed: {exc}"
                 ) from exc
-    # Metric not present — treat as no drift detected (fail-safe: don't retrain
-    # on ambiguous report data).
     logger.warning("DatasetDriftMetric not present in report; defaulting drift score to 0.0")
     return 0.0
 
