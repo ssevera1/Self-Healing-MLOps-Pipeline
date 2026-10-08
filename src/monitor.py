@@ -4,6 +4,7 @@ Compares a reference (historical) dataset against a current (new logs)
 dataset and reports per-column data drift scores.
 """
 
+import concurrent.futures
 import json
 import logging
 import os
@@ -43,24 +44,19 @@ def _read_csv_with_timeout(
     path: str,
     timeout_secs: float = _LOAD_DATASETS_READ_TIMEOUT_SECS,
 ) -> pd.DataFrame:
-    """Read CSV file with timeout enforcement.
-    
-    Raises TimeoutError if read exceeds timeout_secs.
+    """Read CSV file, raising TimeoutError if it exceeds timeout_secs.
+
+    Runs the read in a worker thread rather than using signal.alarm,
+    since SIGALRM only works on the main thread and is POSIX-only.
     """
-    import signal
-    
-    def timeout_handler(signum, frame):
-        raise TimeoutError(f"CSV read exceeded {timeout_secs}s timeout")
-    
-    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-    signal.alarm(int(timeout_secs) + 1)  # Add 1s margin
-    try:
-        df = pd.read_csv(path)
-        signal.alarm(0)
-        return df
-    finally:
-        signal.signal(signal.SIGALRM, old_handler)
-        signal.alarm(0)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(pd.read_csv, path)
+        try:
+            return future.result(timeout=timeout_secs)
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError(
+                f"CSV read of {path} exceeded {timeout_secs}s timeout"
+            ) from None
 
 
 def load_datasets(
@@ -68,22 +64,24 @@ def load_datasets(
     current_path: str = "data/current.csv",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load reference and current datasets from CSV files with retry logic.
-    
-    Retries transient read failures up to _LOAD_DATASETS_MAX_RETRIES times
-    with exponential backoff.
+
+    Retries transient read failures (OSError, e.g. disk delays or temporary
+    unavailability, and read timeouts) up to _LOAD_DATASETS_MAX_RETRIES
+    times with exponential backoff. A malformed CSV (ParserError) fails
+    immediately since it will fail identically on every retry.
     """
     def _load_single_dataset(path: str, label: str) -> pd.DataFrame:
         """Load a single CSV with retries on transient failures."""
-        last_exc = None
-        
         for attempt in range(_LOAD_DATASETS_MAX_RETRIES):
             try:
                 return _read_csv_with_timeout(path)
-            except FileNotFoundError as exc:
+            except FileNotFoundError:
                 logger.error(f"{label} dataset not found at {path}")
                 raise
-            except (pd.errors.ParserError, TimeoutError) as exc:
-                last_exc = exc
+            except pd.errors.ParserError:
+                logger.error(f"Failed to parse {label} dataset at {path}")
+                raise
+            except (OSError, TimeoutError) as exc:
                 if attempt < _LOAD_DATASETS_MAX_RETRIES - 1:
                     wait_time = _LOAD_DATASETS_RETRY_DELAY_SECS * (2 ** attempt)
                     logger.warning(
@@ -95,9 +93,12 @@ def load_datasets(
                     logger.error(
                         f"Failed to load {label} dataset from {path} after {_LOAD_DATASETS_MAX_RETRIES} attempts: {exc}"
                     )
-        
-        raise last_exc
-    
+                    raise
+        raise RuntimeError(
+            f"Failed to load {label} dataset from {path}: _LOAD_DATASETS_MAX_RETRIES "
+            f"is {_LOAD_DATASETS_MAX_RETRIES}, so no read attempt was made"
+        )
+
     reference = _load_single_dataset(reference_path, "reference")
     current = _load_single_dataset(current_path, "current")
 
@@ -253,6 +254,8 @@ def extract_drift_score(report_dict: dict) -> float:
                 raise RuntimeError(
                     f"Unexpected Evidently report schema — drift_share is malformed: {exc}"
                 ) from exc
+    # Metric not present — treat as no drift detected (fail-safe: don't retrain
+    # on ambiguous report data).
     logger.warning("DatasetDriftMetric not present in report; defaulting drift score to 0.0")
     return 0.0
 

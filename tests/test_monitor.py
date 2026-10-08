@@ -1,14 +1,17 @@
 """Tests for src/monitor.py — drift detection logic."""
 
 import json
+import time
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+import src.monitor as monitor_mod
 from src.generate_data import generate_current_data, generate_reference_data
 from src.monitor import (
     FEATURE_COLUMNS,
+    _read_csv_with_timeout,
     extract_drift_score,
     load_datasets,
     load_drift_report,
@@ -66,6 +69,75 @@ class TestLoadDatasets:
     def test_raises_on_missing_file(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             load_datasets(str(tmp_path / "nope.csv"), str(tmp_path / "nope2.csv"))
+
+
+class TestLoadDatasetsRetry:
+    """Regression tests for the retry/backoff/timeout logic in load_datasets."""
+
+    def test_retries_transient_os_error_then_succeeds(self, csv_datasets, monkeypatch):
+        ref_path, cur_path = csv_datasets
+        real_read_csv = pd.read_csv
+        failures_left = {"count": 2}
+
+        def flaky_read(path, *args, **kwargs):
+            if path == ref_path and failures_left["count"] > 0:
+                failures_left["count"] -= 1
+                raise OSError("device busy")
+            return real_read_csv(path, *args, **kwargs)
+
+        monkeypatch.setattr(monitor_mod.pd, "read_csv", flaky_read)
+        monkeypatch.setattr(monitor_mod.time, "sleep", lambda secs: None)
+
+        ref, cur = load_datasets(ref_path, cur_path)
+        assert failures_left["count"] == 0
+        assert isinstance(ref, pd.DataFrame)
+        assert isinstance(cur, pd.DataFrame)
+
+    def test_fails_fast_on_parser_error_without_retry(self, csv_datasets, monkeypatch):
+        ref_path, cur_path = csv_datasets
+        attempts = {"count": 0}
+
+        def bad_read(path, *args, **kwargs):
+            attempts["count"] += 1
+            raise pd.errors.ParserError("bad csv")
+
+        monkeypatch.setattr(monitor_mod.pd, "read_csv", bad_read)
+
+        def sleep_should_not_be_called(secs):
+            raise AssertionError("ParserError must not be retried")
+
+        monkeypatch.setattr(monitor_mod.time, "sleep", sleep_should_not_be_called)
+
+        with pytest.raises(pd.errors.ParserError):
+            load_datasets(ref_path, cur_path)
+        assert attempts["count"] == 1
+
+    def test_raises_after_exhausting_retries_on_persistent_os_error(
+        self, csv_datasets, monkeypatch
+    ):
+        ref_path, cur_path = csv_datasets
+        attempts = {"count": 0}
+
+        def always_fails(path, *args, **kwargs):
+            attempts["count"] += 1
+            raise OSError("disk unavailable")
+
+        monkeypatch.setattr(monitor_mod.pd, "read_csv", always_fails)
+        monkeypatch.setattr(monitor_mod.time, "sleep", lambda secs: None)
+
+        with pytest.raises(OSError):
+            load_datasets(ref_path, cur_path)
+        assert attempts["count"] == monitor_mod._LOAD_DATASETS_MAX_RETRIES
+
+    def test_read_csv_with_timeout_raises_on_slow_read(self, tmp_path, monkeypatch):
+        def slow_read(path, *args, **kwargs):
+            time.sleep(0.5)
+            return pd.DataFrame()
+
+        monkeypatch.setattr(monitor_mod.pd, "read_csv", slow_read)
+
+        with pytest.raises(TimeoutError):
+            _read_csv_with_timeout(str(tmp_path / "x.csv"), timeout_secs=0.05)
 
 
 # ── run_drift_report ──────────────────────────────────────────────────────
