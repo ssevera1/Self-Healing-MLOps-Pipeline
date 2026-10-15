@@ -4,11 +4,13 @@ Compares a reference (historical) dataset against a current (new logs)
 dataset and reports per-column data drift scores.
 """
 
+import concurrent.futures
 import json
 import logging
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +28,16 @@ FEATURE_COLUMNS = [
 
 REPORT_PATH = Path("data/drift_report.json")
 
+_LOAD_DATASETS_MAX_ATTEMPTS = 3
+_LOAD_DATASETS_RETRY_DELAY_SECS = 1.0
+_LOAD_DATASETS_READ_TIMEOUT_SECS = 30.0
+# Overall budget for one dataset across all attempts, so three attempts
+# cannot cost three full read timeouts plus backoff.
+_LOAD_DATASETS_DEADLINE_SECS = 60.0
+# OSErrors that will fail identically on every attempt (bad path or
+# permissions), so retrying them only delays the error.
+_PERMANENT_OS_ERRORS = (PermissionError, IsADirectoryError, NotADirectoryError)
+
 
 def _validate_feature_columns(label: str, df: pd.DataFrame) -> None:
     """Raise ValueError if df is missing any of FEATURE_COLUMNS."""
@@ -34,28 +46,91 @@ def _validate_feature_columns(label: str, df: pd.DataFrame) -> None:
         raise ValueError(f"{label} dataset is missing expected columns: {missing}")
 
 
+def _read_csv_with_timeout(
+    path: str,
+    timeout_secs: float = _LOAD_DATASETS_READ_TIMEOUT_SECS,
+) -> pd.DataFrame:
+    """Read CSV file, raising TimeoutError if it exceeds timeout_secs.
+
+    Runs the read in a worker thread rather than using signal.alarm,
+    since SIGALRM only works on the main thread and is POSIX-only.
+
+    Not a `with` block: ThreadPoolExecutor.__exit__ calls
+    shutdown(wait=True), which would join the stuck worker and make the
+    timeout bound nothing. shutdown(wait=False) returns at once and leaves
+    a hung read to finish (or stay stuck) in a background thread, which is
+    the cost of not blocking the caller.
+    """
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(pd.read_csv, path)
+    try:
+        return future.result(timeout=timeout_secs)
+    except concurrent.futures.TimeoutError:
+        # On Python 3.11+ this class is the builtin TimeoutError, so it can
+        # also be an error raised by read_csv itself. Only relabel it when
+        # the read is still running, which means our timeout fired.
+        if future.done():
+            raise
+        raise TimeoutError(
+            f"CSV read of {path} exceeded {timeout_secs}s timeout"
+        ) from None
+    finally:
+        executor.shutdown(wait=False)
+
+
 def load_datasets(
     reference_path: str = "data/reference.csv",
     current_path: str = "data/current.csv",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load reference and current datasets from CSV files."""
-    try:
-        reference = pd.read_csv(reference_path)
-    except FileNotFoundError as exc:
-        logger.error(f"Reference dataset not found at {reference_path}")
-        raise
-    except pd.errors.ParserError as exc:
-        logger.error(f"Failed to parse reference dataset at {reference_path}: {exc}")
-        raise
+    """Load reference and current datasets from CSV files with retry logic.
 
-    try:
-        current = pd.read_csv(current_path)
-    except FileNotFoundError as exc:
-        logger.error(f"Current dataset not found at {current_path}")
-        raise
-    except pd.errors.ParserError as exc:
-        logger.error(f"Failed to parse current dataset at {current_path}: {exc}")
-        raise
+    Makes up to _LOAD_DATASETS_MAX_ATTEMPTS attempts per file, with
+    exponential backoff, on transient read failures (OSError, e.g. disk
+    delays or temporary unavailability, and read timeouts), all within
+    _LOAD_DATASETS_DEADLINE_SECS. A malformed CSV (ParserError) and
+    permanent OSErrors (permissions, a directory instead of a file) fail
+    immediately since they will fail identically on every attempt.
+    """
+    def _load_single_dataset(path: str, label: str) -> pd.DataFrame:
+        """Load a single CSV with retries on transient failures."""
+        deadline = time.monotonic() + _LOAD_DATASETS_DEADLINE_SECS
+        for attempt in range(_LOAD_DATASETS_MAX_ATTEMPTS):
+            remaining = deadline - time.monotonic()
+            try:
+                return _read_csv_with_timeout(
+                    path, timeout_secs=min(_LOAD_DATASETS_READ_TIMEOUT_SECS, remaining)
+                )
+            except FileNotFoundError:
+                logger.error(f"{label} dataset not found at {path}")
+                raise
+            except pd.errors.ParserError as exc:
+                logger.error(f"Failed to parse {label} dataset at {path}: {exc}")
+                raise
+            except _PERMANENT_OS_ERRORS as exc:
+                logger.error(f"Cannot read {label} dataset at {path}: {exc}")
+                raise
+            except (OSError, TimeoutError) as exc:
+                wait_time = _LOAD_DATASETS_RETRY_DELAY_SECS * (2 ** attempt)
+                last_attempt = attempt == _LOAD_DATASETS_MAX_ATTEMPTS - 1
+                # Leave at least a second for the next read after backing off.
+                out_of_time = deadline - time.monotonic() < wait_time + 1.0
+                if last_attempt or out_of_time:
+                    logger.error(
+                        f"Failed to load {label} dataset from {path} after {attempt + 1} attempt(s): {exc}"
+                    )
+                    raise
+                logger.warning(
+                    f"Failed to load {label} dataset from {path} (attempt {attempt + 1}/{_LOAD_DATASETS_MAX_ATTEMPTS}): {exc}. "
+                    f"Retrying in {wait_time}s..."
+                )
+                time.sleep(wait_time)
+        raise RuntimeError(
+            f"Failed to load {label} dataset from {path}: _LOAD_DATASETS_MAX_ATTEMPTS "
+            f"is {_LOAD_DATASETS_MAX_ATTEMPTS}, so no read attempt was made"
+        )
+
+    reference = _load_single_dataset(reference_path, "reference")
+    current = _load_single_dataset(current_path, "current")
 
     for label, df in (("reference", reference), ("current", current)):
         _validate_feature_columns(label, df)
