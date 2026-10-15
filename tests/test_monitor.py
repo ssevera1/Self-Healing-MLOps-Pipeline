@@ -127,7 +127,7 @@ class TestLoadDatasetsRetry:
 
         with pytest.raises(OSError):
             load_datasets(ref_path, cur_path)
-        assert attempts["count"] == monitor_mod._LOAD_DATASETS_MAX_RETRIES
+        assert attempts["count"] == monitor_mod._LOAD_DATASETS_MAX_ATTEMPTS
 
     def test_read_csv_with_timeout_raises_on_slow_read(self, tmp_path, monkeypatch):
         def slow_read(path, *args, **kwargs):
@@ -136,8 +136,57 @@ class TestLoadDatasetsRetry:
 
         monkeypatch.setattr(monitor_mod.pd, "read_csv", slow_read)
 
+        start = time.monotonic()
         with pytest.raises(TimeoutError):
             _read_csv_with_timeout(str(tmp_path / "x.csv"), timeout_secs=0.05)
+        # The timeout must return control well before the slow read ends,
+        # not after joining the worker thread.
+        assert time.monotonic() - start < 0.3
+
+    def test_timeout_error_from_read_is_not_relabelled(self, tmp_path, monkeypatch):
+        def read_raises_timeout(path, *args, **kwargs):
+            raise TimeoutError("network share timed out")
+
+        monkeypatch.setattr(monitor_mod.pd, "read_csv", read_raises_timeout)
+
+        with pytest.raises(TimeoutError, match="network share timed out"):
+            _read_csv_with_timeout(str(tmp_path / "x.csv"), timeout_secs=5)
+
+    def test_fails_fast_on_permission_error(self, csv_datasets, monkeypatch):
+        ref_path, cur_path = csv_datasets
+        attempts = {"count": 0}
+
+        def denied(path, *args, **kwargs):
+            attempts["count"] += 1
+            raise PermissionError("permission denied")
+
+        monkeypatch.setattr(monitor_mod.pd, "read_csv", denied)
+
+        def sleep_should_not_be_called(secs):
+            raise AssertionError("PermissionError must not be retried")
+
+        monkeypatch.setattr(monitor_mod.time, "sleep", sleep_should_not_be_called)
+
+        with pytest.raises(PermissionError):
+            load_datasets(ref_path, cur_path)
+        assert attempts["count"] == 1
+
+    def test_stops_retrying_at_overall_deadline(self, csv_datasets, monkeypatch):
+        ref_path, cur_path = csv_datasets
+        attempts = {"count": 0}
+
+        def always_fails(path, *args, **kwargs):
+            attempts["count"] += 1
+            raise OSError("disk unavailable")
+
+        monkeypatch.setattr(monitor_mod.pd, "read_csv", always_fails)
+        monkeypatch.setattr(monitor_mod.time, "sleep", lambda secs: None)
+        monkeypatch.setattr(monitor_mod, "_LOAD_DATASETS_DEADLINE_SECS", 1.5)
+
+        with pytest.raises(OSError):
+            load_datasets(ref_path, cur_path)
+        # 1s backoff plus the 1s floor for the next read does not fit in 1.5s.
+        assert attempts["count"] == 1
 
 
 # ── run_drift_report ──────────────────────────────────────────────────────
