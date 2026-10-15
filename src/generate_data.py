@@ -149,7 +149,10 @@ if __name__ == "__main__":
     ref = generate_reference_data()
     validate_dataset(ref, "reference")
     validate_fraud_distribution(ref, "reference")
-    ref.to_csv("data/reference.csv", index=False)
+    try:
+        ref.to_csv("data/reference.csv", index=False)
+    except OSError as e:
+        raise RuntimeError(f"Failed to write reference dataset to data/reference.csv: {e}") from e
 
     # SIMULATE_DRIFT=false → generate on-distribution current data (healthy run).
     # Defaults to true so the pipeline demonstrates self-healing out of the box.
@@ -157,11 +160,17 @@ if __name__ == "__main__":
     cur = generate_current_data(drift=simulate_drift)
     validate_dataset(cur, "current")
     validate_fraud_distribution(cur, "current")
-    cur.to_csv("data/current.csv", index=False)
+    try:
+        cur.to_csv("data/current.csv", index=False)
+    except OSError as e:
+        raise RuntimeError(f"Failed to write current dataset to data/current.csv: {e}") from e
 
     feast = generate_feast_data()
     validate_dataset(feast, "feast")
-    feast.to_parquet("data/user_transactions.parquet", index=False)
+    try:
+        feast.to_parquet("data/user_transactions.parquet", index=False)
+    except OSError as e:
+        raise RuntimeError(f"Failed to write feast dataset to data/user_transactions.parquet: {e}") from e
 
     print(f"Reference data: {ref.shape}")
     print(f"Current data (with drift): {cur.shape}")
