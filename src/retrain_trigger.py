@@ -93,6 +93,11 @@ def heal() -> None:
         print(f"Error during monitoring: {e}", file=sys.stderr)
         sys.exit(1)
 
+    if not np.isfinite(drift_score):
+        logger.error(f"Invalid drift score: {drift_score}")
+        print(f"Error: drift score is not a valid finite number: {drift_score}", file=sys.stderr)
+        sys.exit(1)
+
     logger.info(f"Drift threshold: {DRIFT_THRESHOLD}")
     logger.info(f"Current drift: {drift_score:.4f}")
     print(f"\nDrift threshold: {DRIFT_THRESHOLD}")
