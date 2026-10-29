@@ -1,6 +1,7 @@
 """Tests for src/monitor.py — drift detection logic."""
 
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -273,6 +274,64 @@ class TestExtractDriftScore:
         }
         result = extract_drift_score(report)
         assert isinstance(result, float)
+
+    def test_raises_on_nan_drift_share(self):
+        report = {
+            "metrics": [
+                {
+                    "metric": "DatasetDriftMetric",
+                    "result": {"drift_share": "NaN"},
+                }
+            ]
+        }
+        with pytest.raises(RuntimeError, match="drift_share is malformed"):
+            extract_drift_score(report)
+
+    def test_raises_on_infinite_drift_share(self):
+        report = {
+            "metrics": [
+                {
+                    "metric": "DatasetDriftMetric",
+                    "result": {"drift_share": "inf"},
+                }
+            ]
+        }
+        with pytest.raises(RuntimeError, match="drift_share is malformed"):
+            extract_drift_score(report)
+
+    def test_raises_on_out_of_range_drift_share(self):
+        report = {
+            "metrics": [
+                {
+                    "metric": "DatasetDriftMetric",
+                    "result": {"drift_share": 1.5},
+                }
+            ]
+        }
+        with pytest.raises(RuntimeError, match="drift_share is malformed"):
+            extract_drift_score(report)
+
+    def test_does_not_crash_on_non_serializable_metrics_at_debug_level(self, caplog):
+        """Metrics dicts can contain live objects (e.g. numpy types) that
+        json.dumps(..., default=str) still cannot serialize because the
+        failure is on a dict key, not a value. Debug logging must not be
+        able to crash extraction."""
+
+        class Unserializable:
+            def __str__(self):
+                return "unserializable"
+
+        report = {
+            "metrics": [
+                {
+                    "metric": "DatasetDriftMetric",
+                    "result": {"drift_share": 0.42},
+                    Unserializable(): "bad key",
+                }
+            ]
+        }
+        with caplog.at_level(logging.DEBUG, logger="src.monitor"):
+            assert extract_drift_score(report) == pytest.approx(0.42)
 
 
 # ── Drift detection behavior ─────────────────────────────────────────────
