@@ -7,6 +7,7 @@ dataset and reports per-column data drift scores.
 import concurrent.futures
 import json
 import logging
+import math
 import os
 import sys
 import tempfile
@@ -248,10 +249,14 @@ def extract_drift_score(report_dict: dict) -> float:
     (value between 0.0 and 1.0).
     """
     metrics = _validate_drift_report_structure(report_dict)
-    logger.debug(
-        "Raw drift report metrics: %s",
-        json.dumps(metrics, indent=2, default=str),
-    )
+    if logger.isEnabledFor(logging.DEBUG):
+        try:
+            logger.debug(
+                "Raw drift report metrics: %s",
+                json.dumps(metrics, indent=2, default=str),
+            )
+        except (TypeError, ValueError) as exc:
+            logger.debug("Could not serialize raw drift report metrics: %s", exc)
     logger.debug("Extracting drift score from report with %d metrics", len(metrics))
     for metric in metrics:
         if not isinstance(metric, dict):
@@ -282,9 +287,9 @@ def extract_drift_score(report_dict: dict) -> float:
             drift_share_raw = result["drift_share"]
             try:
                 drift_score = float(drift_share_raw)
-                if not isinstance(drift_score, float):
+                if not math.isfinite(drift_score) or not 0.0 <= drift_score <= 1.0:
                     raise ValueError(
-                        f"float() returned non-float type: {type(drift_score)}"
+                        f"drift_share must be a finite number in [0.0, 1.0], got: {drift_score}"
                     )
                 logger.info("Drift score extracted: %.4f", drift_score)
                 return drift_score
