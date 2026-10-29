@@ -248,6 +248,10 @@ def extract_drift_score(report_dict: dict) -> float:
     (value between 0.0 and 1.0).
     """
     metrics = _validate_drift_report_structure(report_dict)
+    logger.debug(
+        "Raw drift report metrics: %s",
+        json.dumps(metrics, indent=2, default=str),
+    )
     logger.debug("Extracting drift score from report with %d metrics", len(metrics))
     for metric in metrics:
         if not isinstance(metric, dict):
@@ -275,12 +279,22 @@ def extract_drift_score(report_dict: dict) -> float:
                     "Unexpected Evidently report schema — missing 'drift_share' key"
                 )
 
+            drift_share_raw = result["drift_share"]
             try:
-                drift_score = float(result["drift_share"])
+                drift_score = float(drift_share_raw)
+                if not isinstance(drift_score, float):
+                    raise ValueError(
+                        f"float() returned non-float type: {type(drift_score)}"
+                    )
                 logger.info("Drift score extracted: %.4f", drift_score)
                 return drift_score
             except (ValueError, TypeError) as exc:
-                logger.error("Failed to convert drift_share to float: %s", exc)
+                logger.error(
+                    "Failed to convert drift_share to float. Raw value: %s (%s), Error: %s",
+                    drift_share_raw,
+                    type(drift_share_raw),
+                    exc,
+                )
                 raise RuntimeError(
                     f"Unexpected Evidently report schema — drift_share is malformed: {exc}"
                 ) from exc
