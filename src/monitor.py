@@ -228,6 +228,10 @@ def load_drift_report(path: Path | None = None) -> dict:
         logger.error("Drift report file not found: %s", path)
         raise RuntimeError(f"Drift report missing at {path}")
 
+    if not path.is_file():
+        logger.error("Drift report path is not a file: %s", path)
+        raise RuntimeError(f"Drift report path must be a file: {path}")
+
     try:
         with open(path, "r") as f:
             report_dict = json.load(f)
