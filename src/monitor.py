@@ -220,7 +220,7 @@ def load_drift_report(path: Path | None = None) -> dict:
     stays in step with run_drift_report when the module global is
     reassigned (which tests/test_monitor.py does).
 
-    Raises RuntimeError if the file is missing or malformed.
+    Raises RuntimeError if the file is missing, inaccessible, or malformed.
     """
     path = path if path is not None else REPORT_PATH
 
@@ -231,6 +231,10 @@ def load_drift_report(path: Path | None = None) -> dict:
     if not path.is_file():
         logger.error("Drift report path is not a file: %s", path)
         raise RuntimeError(f"Drift report path must be a file: {path}")
+
+    if not os.access(path, os.R_OK):
+        logger.error("Drift report file is not readable: %s", path)
+        raise RuntimeError(f"Drift report file is not readable: {path}")
 
     try:
         with open(path, "r") as f:
