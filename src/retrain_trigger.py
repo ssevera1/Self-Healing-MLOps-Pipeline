@@ -25,6 +25,25 @@ DRIFT_THRESHOLD = float(os.getenv("DRIFT_THRESHOLD", "0.3"))
 MODELS_DIR = Path("models")
 
 
+def validate_data_file(data_path: str) -> None:
+    """Validate that the data file exists and is readable.
+    
+    Args:
+        data_path: Path to the CSV file to validate.
+        
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        PermissionError: If the file is not readable.
+    """
+    path = Path(data_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Data file not found: {data_path}")
+    if not path.is_file():
+        raise FileNotFoundError(f"Path is not a file: {data_path}")
+    if not os.access(path, os.R_OK):
+        raise PermissionError(f"Data file is not readable: {data_path}")
+
+
 def train_model(data_path: str = "data/reference.csv") -> RandomForestClassifier:
     """Train a fraud-detection model and report held-out accuracy.
 
@@ -32,6 +51,7 @@ def train_model(data_path: str = "data/reference.csv") -> RandomForestClassifier
     point to the *current* data so the new model learns the shifted distribution.
     The default (reference data) is kept for standalone / test use.
     """
+    validate_data_file(data_path)
     df = pd.read_csv(data_path)
 
     feature_cols = [
@@ -112,7 +132,8 @@ def heal() -> None:
             model = train_model(data_path="data/current.csv")
             save_model(model)
             print("Self-healing retraining complete.")
-        except (FileNotFoundError, ValueError, pd.errors.ParserError) as e:
+        except (FileNotFoundError, PermissionError, ValueError, pd.errors.ParserError) as e:
+            logger.error(f"Retraining failed: {e}", exc_info=True)
             print(f"Error during retraining: {e}", file=sys.stderr)
             sys.exit(1)
     else:
