@@ -1,11 +1,14 @@
 """Generate synthetic reference and current datasets for drift detection."""
 
+import logging
 import os
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+
+logger = logging.getLogger(__name__)
 
 EXPECTED_COLUMNS = {
     "reference": {"user_transaction_count", "user_transaction_amount_avg", "user_transaction_amount_max", "is_fraud"},
@@ -94,12 +97,16 @@ def validate_fraud_distribution(df: pd.DataFrame, dataset_type: str) -> None:
 def generate_reference_data(n_samples: int = 1000, seed: int = 42) -> pd.DataFrame:
     """Generate a stable reference (historical) dataset."""
     rng = np.random.default_rng(seed)
-    return pd.DataFrame({
+    df = pd.DataFrame({
         "user_transaction_count": rng.poisson(lam=5, size=n_samples),
         "user_transaction_amount_avg": rng.normal(loc=50.0, scale=10.0, size=n_samples),
         "user_transaction_amount_max": rng.normal(loc=200.0, scale=30.0, size=n_samples),
         "is_fraud": rng.choice([0, 1], size=n_samples, p=[0.95, 0.05]),
     })
+    if len(df) == 0:
+        raise ValueError("Reference dataset generation resulted in zero rows")
+    logger.info(f"Generated reference data: {df.shape}")
+    return df
 
 
 def generate_current_data(
@@ -122,28 +129,37 @@ def generate_current_data(
         tx_max = rng.normal(loc=200.0, scale=30.0, size=n_samples)
         fraud_prob = [0.95, 0.05]
 
-    return pd.DataFrame({
+    df = pd.DataFrame({
         "user_transaction_count": tx_count,
         "user_transaction_amount_avg": tx_avg,
         "user_transaction_amount_max": tx_max,
         "is_fraud": rng.choice([0, 1], size=n_samples, p=fraud_prob),
     })
+    if len(df) == 0:
+        raise ValueError("Current dataset generation resulted in zero rows")
+    logger.info(f"Generated current data (drift={drift}): {df.shape}")
+    return df
 
 
 def generate_feast_data(n_users: int = 100, seed: int = 42) -> pd.DataFrame:
     """Generate the Feast feature store parquet (one row per user)."""
     rng = np.random.default_rng(seed)
     now = pd.Timestamp.utcnow()
-    return pd.DataFrame({
+    df = pd.DataFrame({
         "user_id": range(n_users),
         "event_timestamp": [now] * n_users,
         "user_transaction_count": rng.poisson(lam=5, size=n_users).astype("int64"),
         "user_transaction_amount_avg": rng.normal(loc=50.0, scale=10.0, size=n_users).astype("float32"),
         "user_transaction_amount_max": rng.normal(loc=200.0, scale=30.0, size=n_users).astype("float32"),
     })
+    if len(df) == 0:
+        raise ValueError("Feast dataset generation resulted in zero rows")
+    logger.info(f"Generated feast data: {df.shape}")
+    return df
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     Path("data").mkdir(parents=True, exist_ok=True)
 
     ref = generate_reference_data()

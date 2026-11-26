@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from src.generate_data import (
+    generate_current_data,
     generate_feast_data,
     generate_reference_data,
     validate_dataset,
@@ -45,13 +46,30 @@ class TestValidateDataset:
 
     def test_rejects_empty_dataset(self):
         """An all-column-correct but rowless frame must not reach disk."""
-        df = generate_reference_data(n_samples=0)
+        df = generate_reference_data(n_samples=10).iloc[:0]
         with pytest.raises(ValueError, match="no rows"):
             validate_dataset(df, "reference")
 
     def test_rejects_unknown_dataset_type(self):
         with pytest.raises(ValueError, match="Unknown dataset type"):
             validate_dataset(generate_reference_data(n_samples=5), "nope")
+
+
+class TestGeneratorRejectsZeroRows:
+    """generate_* must refuse to produce a dataset with zero rows outright,
+    rather than letting a rowless frame flow out for validate_dataset to catch."""
+
+    def test_reference_data_rejects_zero_samples(self):
+        with pytest.raises(ValueError, match="zero rows"):
+            generate_reference_data(n_samples=0)
+
+    def test_current_data_rejects_zero_samples(self):
+        with pytest.raises(ValueError, match="zero rows"):
+            generate_current_data(n_samples=0)
+
+    def test_feast_data_rejects_zero_users(self):
+        with pytest.raises(ValueError, match="zero rows"):
+            generate_feast_data(n_users=0)
 
 
 class TestValidateFraudDistribution:
