@@ -103,9 +103,9 @@ def generate_reference_data(n_samples: int = 1000, seed: int = 42) -> pd.DataFra
         "user_transaction_amount_max": rng.normal(loc=200.0, scale=30.0, size=n_samples),
         "is_fraud": rng.choice([0, 1], size=n_samples, p=[0.95, 0.05]),
     })
-    logger.info(f"Generated reference data: {df.shape}")
     if len(df) == 0:
         raise ValueError("Reference dataset generation resulted in zero rows")
+    logger.info(f"Generated reference data: {df.shape}")
     return df
 
 
@@ -135,9 +135,9 @@ def generate_current_data(
         "user_transaction_amount_max": tx_max,
         "is_fraud": rng.choice([0, 1], size=n_samples, p=fraud_prob),
     })
-    logger.info(f"Generated current data (drift={drift}): {df.shape}")
     if len(df) == 0:
         raise ValueError("Current dataset generation resulted in zero rows")
+    logger.info(f"Generated current data (drift={drift}): {df.shape}")
     return df
 
 
@@ -152,9 +152,9 @@ def generate_feast_data(n_users: int = 100, seed: int = 42) -> pd.DataFrame:
         "user_transaction_amount_avg": rng.normal(loc=50.0, scale=10.0, size=n_users).astype("float32"),
         "user_transaction_amount_max": rng.normal(loc=200.0, scale=30.0, size=n_users).astype("float32"),
     })
-    logger.info(f"Generated feast data: {df.shape}")
     if len(df) == 0:
         raise ValueError("Feast dataset generation resulted in zero rows")
+    logger.info(f"Generated feast data: {df.shape}")
     return df
 
 
